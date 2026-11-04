@@ -1,0 +1,15 @@
+# 二进制产物
+/dist/
+/mcpd
+/mcpd-*
+
+# 本地配置可能含真实上游 key，永不入库
+config.yaml
+.env
+
+# 本地笔记 / 编辑器 / 系统
+.workbuddy/
+.idea/
+.vscode/
+.DS_Store
+*.log

@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:apiduo:mcp:model-capabilities:4",
+  "title": "Model Capability Extension",
+  "description": "apiduo /v1/models 返回的单个模型对象。四个 OpenAI 标准字段保持原样，其余为追加的能力标识。契约版本 4：按 kind / execution / input / parameters 四层分离，新增模态只需扩 kind 枚举，不改结构。",
+  "type": "object",
+  "required": ["id", "object", "created"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "模型标识，用作跨系统的稳定引用"
+    },
+    "object": {
+      "const": "model"
+    },
+    "created": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix 秒"
+    },
+    "owned_by": {
+      "type": "string",
+      "description": "归属方，展示用，不参与判定。非必填：火山 Ark 的 /api/v3/models 实测不返回该字段，要求它必然导致整批模型校验失败"
+    },
+    "kind": {
+      "enum": ["image", "video", "search"],
+      "description": "产物类型。不设 default：缺省即「未知」，运行时不参与任何生成类工具，必须由配置中心或上游的结构化字段给出。不能缺省成 image —— 真实上游的 /models 里绝大多数是 LLM / VLM / Embedding。搜索也走 model 路由（火山/腾讯/秘塔等实现不同），因此同样有画像；transport=search_query 对应 POST /v1/tools/search。"
+    },
+    "execution": {
+      "type": "object",
+      "description": "执行特性。与产物类型无关：图片也可以异步，视频也可以同步。",
+      "properties": {
+        "task": {
+          "enum": ["sync", "async"],
+          "default": "sync",
+          "description": "sync 直接返回结果；async 返回任务 ID，才需要 task.get"
+        },
+        "transport": {
+          "enum": ["generations", "edits_multipart", "video_generations", "contents_tasks", "search_query"],
+          "default": "generations",
+          "description": "协议族，不是单个 URL。每个值绑定「生成端点 + 任务查询端点 + 请求编码」三件，三者必须同源：只改生成端点会让 task.get 打到错误路径，得到空 body 的 404。generations=/images/generations+/tasks/{id}；edits_multipart=/images/edits（multipart）+/tasks/{id}；video_generations=/videos/generations+/tasks/{id}（new-api）；contents_tasks=/contents/generations/tasks 及其 /{id}（火山 Ark）；search_query=/tools/search，无任务查询。"
+        }
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "description": "输入素材的边界。名字保持跨模态通用：视频也接受参考图（图生视频），搜索两者都不接受。",
+      "properties": {
+        "max_reference_images": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "参考图数量上限，三态：键缺失 = 上限未知、不本地拦截；0 = 明确不支持垫图；N = 上限 N。不设 default —— 把「未声明」当 0 会锁死上游已声明支持图生图的模型。"
+        },
+        "max_reference_videos": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "参考视频数量上限，用于视频续写 / 风格迁移一类能力。同样三态，不设 default。"
+        },
+        "max_prompt_chars": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "提示词长度上限。缺失表示上游未限制或未知。"
+        }
+      },
+      "additionalProperties": true
+    },
+    "parameters": {
+      "type": "object",
+      "description": "怎么调。键为参数名，开放集合：size / duration / top_k 都是同一套约束结构。",
+      "additionalProperties": {
+        "$ref": "#/$defs/paramSpec"
+      }
+    },
+    "source": {
+      "enum": ["upstream", "mcp", "protocol", "builtin"],
+      "description": "省略=纯上游；mcp=有模型级覆盖；protocol=继承管理员协议族模板；builtin=只继承内置 image/video 基础模板。管理字段 _protocol 不会出现在合并结果里"
+    }
+  },
+  "$defs": {
+    "paramSpec": {
+      "type": "object",
+      "description": "受控参数约束。enum/min/max/default 是够用的最小公共子集，避免每个客户端实现 JSON Schema 解释器。",
+      "properties": {
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "description": "允许取值，按顺序展示"
+        },
+        "min": {
+          "type": "number",
+          "description": "数值型下界，含"
+        },
+        "max": {
+          "type": "number",
+          "description": "数值型上界，含"
+        },
+        "default": {
+          "description": "默认值，类型应与 enum 元素或数值区间一致"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "id": "dall-e-3",
+      "object": "model",
+      "created": 1698785189,
+      "owned_by": "openai",
+      "kind": "image",
+      "execution": { "task": "sync", "transport": "generations" },
+      "input": { "max_reference_images": 0 },
+      "parameters": {
+        "size": { "enum": ["1024x1024", "1792x1024"], "default": "1024x1024" },
+        "quality": { "enum": ["standard", "hd"], "default": "standard" },
+        "n": { "min": 1, "max": 1, "default": 1 }
+      }
+    },
+    {
+      "id": "doubao-seedream-5-0-flash-260915",
+      "object": "model",
+      "created": 1762000000,
+      "owned_by": "bytedance",
+      "kind": "image",
+      "execution": { "task": "async", "transport": "generations" },
+      "input": { "max_reference_images": 3 },
+      "parameters": {
+        "size": { "enum": ["1K", "2K", "4K"], "default": "2K" },
+        "n": { "min": 1, "max": 4, "default": 1 },
+        "style": { "enum": ["photographic", "illustration"], "default": "photographic" }
+      },
+      "source": "mcp"
+    },
+    {
+      "id": "doubao-seedance-1-0-pro",
+      "object": "model",
+      "created": 1745000000,
+      "owned_by": "bytedance",
+      "kind": "video",
+      "execution": { "task": "async", "transport": "video_generations" },
+      "_note": "经 new-api 网关时用 video_generations；直连火山 Ark 时改成 contents_tasks，查询端点会随之切到 /contents/generations/tasks/{id}",
+      "input": { "max_reference_images": 1, "max_reference_videos": 0 },
+      "parameters": {
+        "duration": { "enum": [5, 10], "default": 5 },
+        "resolution": { "enum": ["720p", "1080p"], "default": "1080p" },
+        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1"], "default": "16:9" }
+      }
+    },
+    {
+      "id": "volcengine-search",
+      "object": "model",
+      "created": 1762000000,
+      "owned_by": "volcengine",
+      "kind": "search",
+      "execution": { "task": "sync", "transport": "search_query" },
+      "input": {},
+      "parameters": {
+        "count": { "min": 1, "max": 50, "default": 10 },
+        "time_range": { "enum": ["day", "week", "month", "year"], "default": "month" },
+        "include_content": { "enum": [true, false], "default": false }
+      }
+    }
+  ]
+}
