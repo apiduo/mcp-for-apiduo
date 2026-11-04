@@ -53,6 +53,8 @@ echo "== 4) 投 :443 vhost（含 -proxy.inc）并 reload（幂等）=="
 SSL_CONF="$VHOST_DIR/$HOST-ssl.conf"
 INC_CONF="$VHOST_DIR/mcp-for-apiduo-proxy.inc"
 [ -f "$INC_CONF" ] || cp -f "$SRC_DIR/mcp-for-apiduo-proxy.inc" "$INC_CONF"
+INC_ADMIN="$VHOST_DIR/mcp-for-apiduo-admin.inc"
+[ -f "$INC_ADMIN" ] || cp -f "$SRC_DIR/mcp-for-apiduo-admin.inc" "$INC_ADMIN"
 if [ ! -f "$SSL_CONF" ]; then
   cp -f "$SRC_DIR/$HOST-ssl.conf" "$SSL_CONF"
   echo "· 已写入 $SSL_CONF"
@@ -76,14 +78,16 @@ done
 S80=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $HOST" http://127.0.0.1/healthz)
 S443=$(curl -sk -o /dev/null -w '%{http_code}' $R "https://$HOST/healthz")
 ROOT=$(curl -sk $R "https://$HOST/" | grep -o '"mcp":"/mcp"' | head -1)
-ADMIN=$(curl -sk -o /dev/null -w '%{http_code}' $R "https://$HOST/admin/ui")
+TOKEN=$(cat /root/.mcp-apiduo-token 2>/dev/null || true)
+ADMIN_UI=$(curl -sk -o /dev/null -w '%{http_code}' $R "https://$HOST/admin/ui")
+ADMIN_ANON=$(curl -sk -o /dev/null -w '%{http_code}' $R "https://$HOST/admin/config")
+ADMIN_AUTH=$(curl -sk -o /dev/null -w '%{http_code}' $R -H "Authorization: Bearer $TOKEN" "https://$HOST/admin/config")
 INIT_BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
 # 匿名必须 401：没有这道闸，服务会回落到内置服务 key（等于对全网开放额度）
 ANON=$(curl -sk -o /dev/null -w '%{http_code}' $R -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         -H 'MCP-Protocol-Version: 2025-06-18' \
         -d "$INIT_BODY" "https://$HOST/mcp")
-TOKEN=$(cat /root/.mcp-apiduo-token 2>/dev/null || true)
 INIT=$(curl -sk $R -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         -H 'MCP-Protocol-Version: 2025-06-18' \
@@ -92,11 +96,15 @@ INIT=$(curl -sk $R -H "Authorization: Bearer $TOKEN" -H 'Content-Type: applicati
 printf '%-34s %s\n' ":80 /healthz → 301"        "$S80"
 printf '%-34s %s\n' ":443 /healthz"             "$S443"
 printf '%-34s %s\n' ":443 / （服务说明）"        "${ROOT:-<缺失>}"
-printf '%-34s %s\n' ":443 /admin/ui → 404"      "$ADMIN"
+printf '%-34s %s\n' ":443 /admin/ui → 200"      "$ADMIN_UI"
+printf '%-34s %s\n' ":443 /admin/config 无 key → 401" "$ADMIN_ANON"
+printf '%-34s %s\n' ":443 /admin/config 带 key"  "$ADMIN_AUTH"
 printf '%-34s %s\n' ":443 /mcp 匿名 → 401"      "$ANON"
 printf '%-34s %s\n' ":443 /mcp 带 key → init"   "${INIT:-<无 serverInfo>}"
 
-if [ "$S80" = "301" ] && [ "$S443" = "200" ] && [ -n "$ROOT" ] && [ "$ADMIN" = "404" ] && [ "$ANON" = "401" ] && [ -n "$INIT" ]; then
+if [ "$S80" = "301" ] && [ "$S443" = "200" ] && [ -n "$ROOT" ] && \
+   [ "$ADMIN_UI" = "200" ] && [ "$ADMIN_ANON" = "401" ] && [ "$ADMIN_AUTH" = "200" ] && \
+   [ "$ANON" = "401" ] && [ -n "$INIT" ]; then
   echo "✅ 全部通过：https://$HOST/mcp"
 else
   echo "❌ 有断言未通过，见上表"
