@@ -1,0 +1,152 @@
+name: Release
+
+# push 到 main 即发版：自增 patch → 跨平台构建 → 打 tag → 建 Release。
+# 逃生阀：提交信息里带 [skip release] 的 push 整条流水线跳过（workflow_dispatch 不受影响）。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # 缺这一条，打 tag / 建 Release 会 403
+
+# 同一分支串行：两个进程同时读到同一个 tag 再各自自增会撞版本。
+# 刻意不写 cancel-in-progress:true —— 发版跑一半被中断会留下「镜像/产物已出、tag 未打」的中间态。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[skip release]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0        # 浅克隆拿不到历史 tag，版本号会永远从 v0.0.1 起算
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test ./...
+
+      - name: Resolve next version
+        id: ver
+        run: |
+          set -euo pipefail
+          # --sort=-v:refname 不能省：字典序会把 v1.9.0 判成新于 v1.10.0
+          PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          BASE="${PREV:-v0.0.0}"          # 零 tag 冷启动从 v0.0.0 起算
+          CORE="${BASE#v}"
+          CORE="${CORE%%[-+]*}"           # v1.2.3-rc.1 的后缀会打断算术
+          IFS=. read -r MA MI PA <<< "$CORE"
+          PA="${PA%%[-+]*}"
+          case "$MA$MI$PA" in
+            ''|*[!0-9]*) echo "::error::上一个 tag 不是 vX.Y.Z 形式：$BASE"; exit 1 ;;
+          esac
+          NEW="v${MA}.${MI}.$((PA + 1))"
+          if git rev-parse -q --verify "refs/tags/${NEW}" >/dev/null; then
+            echo "::error::${NEW} 已存在（并发，或有人手打了同名 tag）"; exit 1
+          fi
+          echo "prev=${PREV}" >> "$GITHUB_OUTPUT"
+          echo "next=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "Previous: ${PREV:-<none>} -> Next: ${NEW}"
+
+      - name: Build changelog
+        env:
+          PREV: ${{ steps.ver.outputs.prev }}
+          TAG: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          # auto 模式下 tag 还没打，右端点是 HEAD；首个 release 走全量历史但要限长
+          if [ -z "$PREV" ]; then RANGE=HEAD; else RANGE="${PREV}..HEAD"; fi
+          {
+            echo "## Changes"
+            echo
+            git log "$RANGE" --no-merges --pretty='- %s (%h)' --max-count=100 \
+              || echo "- Initial release"
+            echo
+            echo "**Full Changelog**: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commits/${TAG}"
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Build cross-platform binaries
+        env:
+          VERSION: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS=${target%%/*}
+            GOARCH=${target##*/}
+            EXT=''
+            [ "$GOOS" = windows ] && EXT='.exe'
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
+              -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/mcpd-${GOOS}-${GOARCH}${EXT}" ./cmd/mcpd
+          done
+          ls -la dist
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # 冒烟断言「自报版本 == 发布版本」：证明 -X main.version 真的注进去了，
+      # 而不是发了五个跑起来还自称 0.1.0-dev 的二进制。
+      - name: Smoke test
+        env:
+          VERSION: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          printf 'base_url: http://127.0.0.1:9\napi_key: smoke\n' > "$RUNNER_TEMP/smoke.yaml"
+          ./dist/mcpd-linux-amd64 -config "$RUNNER_TEMP/smoke.yaml" \
+            -addr :18080 -admin-addr :18081 > "$RUNNER_TEMP/mcpd.log" 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:18080/healthz; then break; fi
+            sleep 0.3
+          done
+          if ! curl -sf -o "$RUNNER_TEMP/healthz.json" http://127.0.0.1:18080/healthz; then
+            echo "::error::服务没起来"; cat "$RUNNER_TEMP/mcpd.log"; exit 1
+          fi
+          GOT=$(jq -r .version "$RUNNER_TEMP/healthz.json")
+          [ "$GOT" = "$VERSION" ] || { echo "::error::自报版本 ${GOT} != ${VERSION}"; exit 1; }
+          echo "smoke ok: ${GOT}"
+
+      - name: Create tag
+        env:
+          TAG: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          # annotated tag 需要 committer 身份，runner 上默认没有全局配置
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          # 幂等：同一个 tag 重跑不应变红（补发/改了 workflow 再跑都依赖这点）
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，跳过创建"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --title "Release $TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            dist/*
