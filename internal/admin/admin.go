@@ -14,9 +14,11 @@ package admin
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -241,7 +243,9 @@ func (h *Handler) auth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "管理端未启用：配置里缺少 api_key", http.StatusServiceUnavailable)
 			return
 		}
-		if bearer(r) != want {
+		// 常量时间比较：`!=` 会在第一个不同的字节上短路，
+		// 足够多的样本可以把 key 一位一位试出来。网络上不好打，但这是零成本的修法。
+		if subtle.ConstantTimeCompare([]byte(bearer(r)), []byte(want)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -468,7 +472,7 @@ func (h *Handler) handleOverlays(w http.ResponseWriter, r *http.Request) {
 			Ops:     []Op{{Op: "overlays.replace", Overlays: &next}},
 			Actor:   actorFromRequest(r),
 			Source:  "rest",
-			Remote:  r.RemoteAddr,
+			Remote:  remoteOf(r),
 			DryRun:  isDryRun(r),
 			IfMatch: r.Header.Get("If-Match"),
 		})
@@ -551,6 +555,25 @@ func isDryRun(r *http.Request) bool {
 	v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("dry_run")))
 	on, _ := strconv.ParseBool(v)
 	return on
+}
+
+// remoteOf 取调用方地址，给审计日志用。
+//
+// 生产上服务只绑回环、前面一定是 nginx，直接读 RemoteAddr 永远是 127.0.0.1 ——
+// 时间线里「谁改的」就只剩一个 actor 字符串，出了事定位不到来源。
+// X-Real-IP 由 nginx 用 $remote_addr 覆盖写入（不像 X-Forwarded-For 可以追加伪造），
+// 且只在「直连方是本机」时才采信：服务一旦被直接暴露，这个头就不可信了。
+func remoteOf(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+			return v
+		}
+	}
+	return r.RemoteAddr
 }
 
 func actorFromRequest(r *http.Request) string {

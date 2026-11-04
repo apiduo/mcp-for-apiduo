@@ -257,11 +257,17 @@ func TestCORSLocalOnly(t *testing.T) {
 			t.Errorf("origin %q 未被允许: %d %v", origin, w.Code, w.Header())
 		}
 	}
+	// 外部来源：不发 CORS 头，但请求本身照常处理。
+	// 这里挡人的是 Bearer（没有就是 401），不是 Origin —— 把 Origin 当闸门
+	// 会连自家同源页面一起挡掉（线上真的发生过）。
 	req := httptest.NewRequest(http.MethodGet, "/admin/state", nil)
 	req.Header.Set("Origin", "https://evil.example.com")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("外部站点应 403，实际 %d", w.Code)
+	if w.Code != http.StatusNoContent {
+		t.Errorf("外部站点应被放行到下游（由鉴权拒绝），实际 %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("外部站点不应拿到 CORS 头，得到 %q", got)
 	}
 }

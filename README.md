@@ -1313,6 +1313,7 @@ python3 testdata/mock_upstream.py 3999 &
 | 变更记录 `<config>.audit.jsonl` + `GET /admin/history` | ✅ |
 | 面板适配 `revision`（保存带 If-Match，409 提示刷新而不是盲目重发） | ✅ |
 | 变更记录面板（谁在什么时候动了配置 · 外部改动只点亮按钮，不打断编辑） | ✅ |
+| 公网边界加固（身份三态 / CORS 不鉴权 / 公开端点脱敏 / 约束兜底 / CSP） | ✅ |
 | 三栏宽度随视口缩放（`clamp` 侧栏）+ 右栏可收起（`⌘\`，40px 脊） | ✅ |
 | 校验分级（`issues` 阻断 / `warnings` 放行） | ✅ |
 | 整条下架 `disabled` + 漂移自查 `GET /admin/drift` | ✅ |
@@ -1398,6 +1399,52 @@ gh api /orgs/apiduo/packages/container/mcp-for-apiduo --jq .visibility   # 期�
 - 不想发版的提交（纯文档、注释）在提交信息里写 `[skip release]`，整场跳过；漏了就 `workflow_dispatch` 补跑。
 - 顺序是「先出产物、再打 tag」：构建或冒烟失败不会留下有 tag、没产物的半成品；Release 步骤幂等，可重跑。
 - 五个平台：`linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`、`windows/amd64`。
+
+### 公网边界：一次对抗审查的四个结论（2026-11-05）
+
+线上跑起来之后做了一轮对抗测试，四个真问题，全部是「每一层单独看都合理，
+接起来就漏」的那一类。
+
+**1. `/mcp` 的身份回落可被任意头触发（严重）**
+
+公网 nginx 的判据是「`Authorization` 非空」，服务端的判据是「能解析成 `Bearer <token>`」。
+两者中间的差值就是洞：`Authorization: x` 能穿过 nginx，而服务端把「解析不出来」
+当成「没带」，回落到配置里的服务身份 —— 匿名调用 `models.list` 直接返回了上游模型列表，
+换成 `image.generate` 就是花部署者的额度。
+
+第一性原理：**「没带凭证」和「带了坏凭证」是两件事**，前者可以回落到单租户身份，
+后者必须 401。`bearer()` 现在返回 `(token, present)`，调用方无法再把两者混为一谈；
+nginx 侧也改成 `^Bearer[ \t]+\S`。两层各说各的，所以要两层都改。
+
+**2. CORS 把自家面板挡在门外（严重，功能）**
+
+线上面板打开正常、读得到数据，但**一保存就 403**。原因是 CORS 中间件把所有
+「非本机 Origin」一律拒绝，而面板跑在 `https://mcp.apiduo.cn`：
+浏览器对**同源**的 POST/PUT 同样会带 `Origin`（GET 不带），于是每个写请求都被自己挡掉。
+
+第一性原理：**CORS 不是鉴权**。凭证是 sessionStorage 里的 Bearer，跨站页面读不到，
+也过不了预检；非白名单来源根本不需要 403 —— 它没有凭证，只会拿到 401。
+现在 CORS 只做一件事：给白名单来源补响应头。请求本身照常处理。
+
+**3. 公开探活会吐密钥片段与内网服务名**
+
+`/admin/healthz` 是免鉴权的，却返回了 `api_key: "sk-5***30"` 和
+`base_url: "http://apiduo:3000/v1"`。掩码不是脱敏 —— 前 4 位 + 后 2 位足够确认
+「这把 key 属于哪一批」，内网服务名则是拓扑信息。公开端点现在只回答
+`ok / version / config_ok / revision / 计数`。
+
+**4. 「声明的约束必须拦得住调用」只做到了一半**
+
+`search.query` 的 `extra` 只检查键是否存在，不校验 enum/min/max ——
+配置里写的 `count ≤ 10` 在这个入口上等于一句注释。
+另外 `n` 在模型没声明 `max` 时会原样透传，一次 `n=1000` 就能把额度打光。
+现在两个入口共用 `checkExtra`；未声明上限时 `n ≤ 8`。
+
+顺手补的几处（都不改变对外契约）：服务端 API key 比较改常量时间；
+`http.Server` 补 `ReadTimeout` / `IdleTimeout`（不设 `WriteTimeout`，否则 5 分钟的
+同步生成会被掐断）；审计记 `X-Real-IP`（只在直连方是本机时采信，否则永远是 127.0.0.1）；
+审计文件超过 8 MiB 裁到最近 500 行；`/admin/ui` 下发 CSP / `X-Frame-Options` / `nosniff`，
+vhost 加 HSTS。
 
 ## 13. 文档
 

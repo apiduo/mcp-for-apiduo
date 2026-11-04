@@ -88,6 +88,12 @@ func apiKeyFrom(ctx context.Context) string {
 	return s
 }
 
+// APIKey 从 context 取本次请求的令牌。
+//
+// 导出是为了让 HTTP 层能断言「这个请求最终用的是谁的身份」——
+// 鉴权绕过正是发生在这个取值上，测试必须能看见它。
+func APIKey(ctx context.Context) string { return apiKeyFrom(ctx) }
+
 // models 拉取并合并模型列表。按 key 分桶缓存，因为不同 key 可见的模型可能不同。
 func (d *Deps) models(ctx context.Context, apiKey string) ([]catalog.Model, error) {
 	bucket := hashKey(apiKey)
@@ -318,8 +324,17 @@ func buildPayload(m catalog.Model, in GenerateInput, refs []string) (map[string]
 		p["quality"] = in.Quality
 	}
 	if in.N != nil {
+		if *in.N < 1 {
+			return nil, fmt.Errorf("n 必须 ≥ 1，收到 %d", *in.N)
+		}
 		if err := checkRange(m, "n", float64(*in.N)); err != nil {
 			return nil, err
+		}
+		if _, declared := m.Parameters()["n"].(map[string]any); !declared && *in.N > maxBatchN {
+			// 画像没声明上限时的兜底：上游常常只认 n、不给 max，
+			// 于是一次 n=1000 就能把额度打光。这不是替上游做主，
+			// 是不让「没配置」等价于「没有上限」。
+			return nil, fmt.Errorf("模型 %s 未声明 n 的上限，单次最多 %d；要更多请分多次调用", m.ID(), maxBatchN)
 		}
 		p["n"] = *in.N
 	}
@@ -342,6 +357,10 @@ func buildPayload(m catalog.Model, in GenerateInput, refs []string) (map[string]
 // 模型画像缺失时（真实上游常常不给），这几个参数仍然允许透传 ——
 // 否则 size/n 这类标准参数会被白名单误杀，模型直接不可用。
 // 非标准参数仍必须由画像显式声明。
+// maxBatchN 是「模型画像没声明 n 的上限」时的兜底数量。
+// 声明了 max 的模型按声明走 —— 有约束的地方不该被一个常量覆盖。
+const maxBatchN = 8
+
 var standardParams = map[string]bool{
 	"size": true, "quality": true, "n": true, "format": true,
 	"duration": true, "resolution": true, "aspect_ratio": true,
@@ -455,24 +474,9 @@ func (d *Deps) search(ctx context.Context, _ *mcp.CallToolRequest, in SearchInpu
 		return nil, SearchOutput{}, err
 	}
 
-	p := map[string]any{"model": m.ID(), "query": q}
-	if in.Count != nil {
-		if err := checkRange(m, "count", float64(*in.Count)); err != nil {
-			return nil, SearchOutput{}, err
-		}
-		p["count"] = *in.Count
-	}
-	if in.IncludeContent != nil {
-		if !m.HasParam("include_content") {
-			return nil, SearchOutput{}, fmt.Errorf("模型 %s 不支持 include_content", m.ID())
-		}
-		p["need_content"] = *in.IncludeContent
-	}
-	for k, v := range in.Extra {
-		if !m.HasParam(k) && !standardParams[k] {
-			return nil, SearchOutput{}, fmt.Errorf("模型 %s 未声明参数 %q", m.ID(), k)
-		}
-		p[k] = v
+	p, err := buildSearchPayload(m, in, q)
+	if err != nil {
+		return nil, SearchOutput{}, err
 	}
 
 	resp, err := d.Up.Search(ctx, key, p)
@@ -483,6 +487,37 @@ func (d *Deps) search(ctx context.Context, _ *mcp.CallToolRequest, in SearchInpu
 	return text(fmt.Sprintf("检索到 %d 条结果", len(results))), SearchOutput{
 		Model: m.ID(), Results: results, Count: len(results),
 	}, nil
+}
+
+// buildSearchPayload 与 buildPayload 同构：先白名单，再校验约束。
+// 拆出来是为了能被单测直接盯住 —— 「声明的约束必须拦得住调用」这条规则
+// 在两个入口上必须一模一样，靠肉眼比对迟早会漏。
+func buildSearchPayload(m catalog.Model, in SearchInput, q string) (map[string]any, error) {
+	p := map[string]any{"model": m.ID(), "query": q}
+	if in.Count != nil {
+		if err := checkRange(m, "count", float64(*in.Count)); err != nil {
+			return nil, err
+		}
+		p["count"] = *in.Count
+	}
+	if in.IncludeContent != nil {
+		if !m.HasParam("include_content") {
+			return nil, fmt.Errorf("模型 %s 不支持 include_content", m.ID())
+		}
+		p["need_content"] = *in.IncludeContent
+	}
+	for k, v := range in.Extra {
+		if !m.HasParam(k) && !standardParams[k] {
+			return nil, fmt.Errorf("模型 %s 未声明参数 %q", m.ID(), k)
+		}
+		// 早先这里只检查「键存不存在」，于是「配置中心写了 count ≤ 10」
+		// 在 search.query 上等于一句注释，越界值照样打到上游。
+		if err := checkExtra(m, k, v); err != nil {
+			return nil, err
+		}
+		p[k] = v
+	}
+	return p, nil
 }
 
 // ── task.get ────────────────────────────────────────────────────────────

@@ -98,21 +98,28 @@ func main() {
 
 	// 调试端点走与真实客户端完全相同的 handler；injectKey 保证用服务身份。
 	adm.MCP = injectKey(httpHandler, store)
-	mcpMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		c := store.Get().Redacted()
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":           true,
-			"version":      version,
-			"base_url":     c.BaseURL,
-			"config_error": store.LastError(),
-		})
-	})
+	mcpMux.HandleFunc("/healthz", publicHealth(store, version))
 
 	adminMux := http.NewServeMux()
 	adm.Routes(adminMux)
 
-	mcpSrv := &http.Server{Addr: *addr, Handler: mcpMux, ReadHeaderTimeout: 10 * time.Second}
-	adminSrv := &http.Server{Addr: *adminAddr, Handler: admin.CORS(adminMux), ReadHeaderTimeout: 10 * time.Second}
+	// 超时按「请求侧封闭、响应侧不封」配：
+	//   ReadHeaderTimeout / ReadTimeout 挡住 slowloris（发完头再按字节拖 body）；
+	//   IdleTimeout 回收空转连接；
+	//   **不设 WriteTimeout** —— 同步生成最长 5 分钟，写超时会把正常的长任务掐断。
+	//   MaxHeaderBytes 从默认 1MB 收到 64KB：调试报文都在 body 里，头不需要那么大。
+	newServer := func(addr string, h http.Handler) *http.Server {
+		return &http.Server{
+			Addr:              addr,
+			Handler:           h,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    64 << 10,
+		}
+	}
+	mcpSrv := newServer(*addr, mcpMux)
+	adminSrv := newServer(*adminAddr, admin.CORS(adminMux))
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -145,14 +152,42 @@ func main() {
 	log.Info("已退出")
 }
 
+// publicHealth 是公网探活。它只回答「活着吗、哪个版本」。
+//
+// 早先这里返回 base_url 与 config_error：前者暴露内网服务名（http://apiduo:3000/v1），
+// 后者会把配置路径、YAML 解析行号一并吐到公网。要排障走 /admin/healthz（需服务身份）。
+func publicHealth(store *config.Store, version string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"version":   version,
+			"config_ok": store.LastError() == "",
+		})
+	}
+}
+
 // injectKey 把客户端令牌放进 context。
 //
-// 客户端带了就用客户端的（多用户），没带才回落到配置里的服务身份（单租户）。
+// 三条规则，缺一不可：
+//   - 没有 Authorization 头：回落到配置里的服务身份（单租户内网的常态）。
+//   - `Bearer <token>`：用客户端的（多用户）。
+//   - 头在、但语法不对：**401，绝不回落**。
+//
+// 第三条是安全边界，不是洁癖。公网入口的 nginx 只判断「这个头非空」，
+// 所以 `Authorization: x` 能一路穿到这里；此时若回落到服务身份，
+// 任何人发一个乱写的头就等于拿到了部署者的凭证 —— 匿名即可用服务额度生成。
+// 「解析失败」与「没带」是两件事，混在一起就变成了鉴权绕过。
 func injectKey(next http.Handler, store *config.Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := bearer(r)
-		if key == "" {
+		key, present := bearer(r)
+		if !present {
 			key = store.Get().APIKey
+		} else if key == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mcp"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error": "Authorization 头不是 `Bearer <token>`：不要发送空令牌或裸 scheme",
+			})
+			return
 		}
 		next.ServeHTTP(w, r.WithContext(tools.WithAPIKey(r.Context(), key)))
 	})
@@ -292,13 +327,22 @@ func validateOverlays(ctx context.Context, up *upstream.Client, store *config.St
 	return out
 }
 
-func bearer(r *http.Request) string {
-	h := r.Header.Get("Authorization")
+// bearer 解析 Authorization，第二个返回值区分「头不存在」与「头存在但不可用」。
+//
+// 只返回字符串无法表达这个区别，调用方就必然把两者当成同一件事 ——
+// 这正是上一个版本的漏洞所在。
+func bearer(r *http.Request) (token string, present bool) {
+	h := strings.TrimSpace(r.Header.Get("Authorization"))
+	if h == "" {
+		return "", false
+	}
 	const p = "Bearer "
 	if len(h) > len(p) && strings.EqualFold(h[:len(p)], p) {
-		return strings.TrimSpace(h[len(p):])
+		if tok := strings.TrimSpace(h[len(p):]); tok != "" {
+			return tok, true
+		}
 	}
-	return ""
+	return "", true
 }
 
 func envOr(k, def string) string {

@@ -55,7 +55,7 @@ func (h *Handler) handleOps(w http.ResponseWriter, r *http.Request) {
 		Ops:     in.Ops,
 		Actor:   orDefault(in.Actor, actorFromRequest(r)),
 		Source:  "rest",
-		Remote:  r.RemoteAddr,
+		Remote:  remoteOf(r),
 		DryRun:  in.DryRun || isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -221,7 +221,7 @@ func (h *Handler) handlePatchModel(w http.ResponseWriter, r *http.Request) {
 		Ops:     []Op{{Op: "model.patch", Model: id, Patch: patch}},
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  r.RemoteAddr,
+		Remote:  remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -240,7 +240,7 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		Ops:     []Op{{Op: "model.delete", Model: id}},
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  r.RemoteAddr,
+		Remote:  remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -255,7 +255,7 @@ func (h *Handler) handleDefault(w http.ResponseWriter, r *http.Request) {
 	req := commitRequest{
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  r.RemoteAddr,
+		Remote:  remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	}
@@ -304,7 +304,7 @@ func (h *Handler) handleDisabled(w http.ResponseWriter, r *http.Request) {
 		Ops:     []Op{op},
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  r.RemoteAddr,
+		Remote:  remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -319,7 +319,7 @@ func (h *Handler) handleProtocol(w http.ResponseWriter, r *http.Request) {
 	req := commitRequest{
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  r.RemoteAddr,
+		Remote:  remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	}
@@ -465,19 +465,22 @@ func countsOf(ov catalog.Overlays) map[string]int {
 	}
 }
 
-// handleHealth 只暴露不含密钥的事实。
+// handleHealth 是**唯一免鉴权**的信息端点，所以它只回答「活着吗」。
+//
+// 早先这里返回了掩码后的 api_key 与 base_url。掩码不是脱敏：`sk-5***30`
+// 已经是服务身份 key 的前 4 位加后 2 位，公网任何人都能拿到；
+// base_url 则是内网服务名。一个匿名端点不该有这个信息量。
+// 要排障请看 /admin/state（带服务身份），那里有完整信息。
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
-	cfg := h.store.Get().Redacted()
 	ov := h.store.Overlays()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"base_url":     cfg.BaseURL,
-		"api_key":      cfg.APIKey,
-		"config_error": h.store.LastError(),
-		"revision":     h.store.Revision(),
-		"models":       len(ov.Models),
-		"disabled":     len(ov.Disabled),
-		"protocols":    len(ov.Protocols),
-		"defaults":     ov.Settings.Defaults,
+		"ok":        true,
+		"version":   h.Version,
+		"config_ok": h.store.LastError() == "",
+		"revision":  h.Revision(),
+		"models":    len(ov.Models),
+		"disabled":  len(ov.Disabled),
+		"protocols": len(ov.Protocols),
 	})
 }
 

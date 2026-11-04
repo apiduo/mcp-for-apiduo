@@ -292,6 +292,17 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	// 页面是公开的，而它把服务身份 key 存在 sessionStorage 里 ——
+	// 一旦有脚本注入，等同于交出凭证。CSP 不防「页面自己写的内联脚本」
+	// （单文件页面必须允许 inline），但能挡住外链脚本、eval、以及把数据发去第三方。
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
+			"img-src 'self' data: blob: https:; font-src 'self' data:; "+
+			"connect-src 'self' https: http://localhost:* http://127.0.0.1:*; "+
+			"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = w.Write(data)
 }
 
@@ -320,10 +331,16 @@ func (c *captureWriter) WriteHeader(code int) {
 }
 func (c *captureWriter) Flush() {}
 
-// CORS 只允许本机调试来源（含 file:// 的 Origin: null）。
+// CORS 只决定「浏览器能不能把响应交给脚本」，不承担鉴权。
 //
-// 管理端口靠服务 key 鉴权，不能因此把任意站点加进白名单：
-// 否则恶意页面可以拿用户浏览器里存的服务 key 打这里。
+// 这里踩过一个真实的坑：把 Origin 当成鉴权闸门，非本机来源一律 403。
+// 结果是线上面板自己也不能保存 —— 它跑在 https://mcp.apiduo.cn，
+// 浏览器对**同源**的 POST/PUT 同样会带 Origin（GET 不带），于是每一个写请求
+// 都被自己挡掉，表现成「读得到、写不了」，而日志里只有一行 origin not allowed。
+//
+// 第一性原理：凭证是 Bearer，存在 sessionStorage 里。跨站页面读不到它，
+// 也过不了预检；所以非白名单来源根本不需要 403 —— 它没有凭证，只会拿到 401。
+// 这里只做两件事：同源直接放行；白名单来源补 CORS 头让脚本能读响应。
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
@@ -331,18 +348,20 @@ func CORS(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r) // 同源请求或非浏览器客户端
 			return
 		}
-		if !localOrigin(origin) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
+		// 本机调试来源（含 file:// 的 null）才补 CORS 头。
+		// 其余来源不补，也不需要拒绝：没有 Bearer 它只能拿到 401。
+		if localOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers",
+				"Authorization, Content-Type, If-Match, X-Admin-Actor, X-Agent-Name, X-Debug-Allow-Cost, MCP-Protocol-Version, Mcp-Session-Id")
+			// 浏览器里读 ETag 需要显式放行，否则脚本拿不到版本号。
+			w.Header().Set("Access-Control-Expose-Headers", "ETag")
+			w.Header().Set("Access-Control-Max-Age", "600")
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers",
-			"Authorization, Content-Type, If-Match, X-Admin-Actor, X-Agent-Name, X-Debug-Allow-Cost, MCP-Protocol-Version, Mcp-Session-Id")
-		// 浏览器里读 ETag 需要显式放行，否则脚本拿不到版本号。
-		w.Header().Set("Access-Control-Expose-Headers", "ETag")
-		w.Header().Set("Access-Control-Max-Age", "600")
+		// 预检统一在这里收口：白名单来源已带 ACAO，其他来源没有，浏览器自己会拦。
+		// 交给 mux 只会得到一个 405，反而像是服务坏了。
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -350,6 +369,7 @@ func CORS(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
 
 func localOrigin(raw string) bool {
 	if raw == "null" { // file:// 打开的本地页面

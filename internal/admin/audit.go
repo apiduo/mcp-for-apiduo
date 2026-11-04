@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -46,6 +47,17 @@ type auditLog struct {
 
 const auditRingSize = 200
 
+// 审计文件的上限。追加写没有上限 = 给磁盘埋一颗定时炸弹：
+// 一个 agent 循环改配置，一天就能写掉几百 MB。
+//
+// 超限时裁到最近 auditKeepLines 行，而不是改名轮转：
+// 轮转后的瞬间 /admin/history 只剩空文件，看起来像「日志丢了」，
+// 而这里的读者恰恰是出事时才来翻日志的人。
+const (
+	auditMaxBytes  = 8 << 20
+	auditKeepLines = 500
+)
+
 func newAuditLog(configPath string) *auditLog {
 	a := &auditLog{ring: make([]auditEntry, 0, auditRingSize)}
 	if configPath != "" {
@@ -68,6 +80,7 @@ func (a *auditLog) append(e auditEntry) error {
 	if a.path == "" {
 		return nil
 	}
+	a.trimIfLarge()
 
 	f, err := os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -82,6 +95,35 @@ func (a *auditLog) append(e auditEntry) error {
 		return err
 	}
 	return nil
+}
+
+// trimIfLarge 在文件超过上限时裁到最近 auditKeepLines 行。
+//
+// 失败直接返回：审计是旁路，不能因为它写不进去就拒绝一次已经生效的配置变更。
+// 调用时持锁，所以不会和新追加的行交错。
+func (a *auditLog) trimIfLarge() {
+	st, err := os.Stat(a.path)
+	if err != nil || st.Size() <= auditMaxBytes {
+		return
+	}
+	entries, err := readAuditFile(a.path, auditKeepLines)
+	if err != nil {
+		return
+	}
+	var buf bytes.Buffer
+	for _, e := range entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			continue
+		}
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	tmp := a.path + ".trim"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, a.path)
 }
 
 // History 返回最近 limit 条记录（时间正序）。
