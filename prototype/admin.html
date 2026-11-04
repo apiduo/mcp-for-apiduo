@@ -798,6 +798,86 @@ pre.dbg-code{
 .dbg-actions{ display:flex;flex-wrap:wrap;gap:7px;margin-top:4px }
 .dbg-actions .btn{ font-size:12px;padding:6px 11px }
 .dbg-note{ font-size:11.5px;line-height:1.55;color:var(--text-2);margin:8px 0 0 }
+
+/* ── 变更记录：服务端 audit.jsonl 的时间线 ────────────────────────────
+   只读视图。竖轴用 ::before 画在每一行自己的高度里，首尾各自收口，
+   行高变化时不需要重新量位置。 */
+.hist-btn{ position:relative;flex:none }
+.hist-btn.stale{ color:var(--accent-ink);border-color:var(--accent-line) }
+.hist-btn .dot{
+  position:absolute;top:-4px;right:-4px;width:7px;height:7px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 0 2.5px var(--surface-2);
+}
+/* 高度跟着条数走：5 条时不留一大片空白，多了才封顶内滚 */
+.dbg.hist{ width:min(660px,94vw);height:auto;max-height:min(720px,88vh) }
+.hist-rev{
+  margin-left:auto;display:inline-flex;align-items:center;flex:none;
+  padding:4px 10px;border-radius:99px;background:var(--fill);
+  font:11px/1 var(--mono);color:var(--text-3);
+}
+.hist-body{ flex:1;min-height:0;overflow:auto;padding:4px 0 10px }
+.hist-empty{
+  margin:26px 22px;padding:22px;border:1px dashed var(--line-2);border-radius:var(--r-md);
+  font-size:12px;line-height:1.75;color:var(--text-3);text-align:center;background:var(--surface-2);
+}
+.hist-empty code{ font-family:var(--mono);color:var(--text-2) }
+.hist-empty .btn{ margin-top:12px;font-size:12px;padding:6px 12px }
+
+.hist-row{ display:grid;grid-template-columns:9px minmax(0,1fr);column-gap:14px;padding:0 20px }
+.hist-rail{ grid-column:1;position:relative;display:flex;justify-content:center }
+.hist-rail::before{ content:"";position:absolute;left:calc(50% - .5px);top:0;bottom:0;width:1px;background:var(--line-2) }
+.hist-row:first-child .hist-rail::before{ top:21px }
+.hist-row:last-child .hist-rail::before{ bottom:calc(100% - 21px) }
+.hist-row:only-child .hist-rail::before{ display:none }
+.hist-dot{
+  width:7px;height:7px;border-radius:50%;margin-top:18px;flex:none;z-index:1;
+  background:var(--text-3);box-shadow:0 0 0 3px var(--surface);
+}
+.hist-row[data-outcome="saved"] .hist-dot{ background:var(--ok) }
+.hist-row[data-outcome="dry_run"] .hist-dot{ background:var(--warn-ink) }
+.hist-row[data-outcome="rejected"] .hist-dot,
+.hist-row[data-outcome="failed"] .hist-dot{ background:var(--bad) }
+
+.hist-card{ grid-column:2;min-width:0;padding:13px 0 15px;border-bottom:1px solid var(--line) }
+.hist-row:last-child .hist-card{ border-bottom:0 }
+.hist-h{ display:flex;align-items:center;gap:8px;min-width:0 }
+.hist-when{ font-size:12px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums }
+.hist-out{
+  flex:none;font-size:10.5px;font-weight:650;letter-spacing:.02em;padding:1.5px 7px;
+  border-radius:99px;background:var(--fill);color:var(--text-2);
+}
+.hist-out.ok{ background:var(--ok-soft);color:var(--ok-ink) }
+.hist-out.warn{ background:var(--warn-soft);color:var(--warn-ink) }
+.hist-out.bad{ background:var(--bad-soft);color:var(--bad-ink) }
+.hist-who{
+  margin-left:auto;max-width:46%;font-size:11.5px;color:var(--text-3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.hist-ops{ list-style:none;margin:7px 0 0;padding:0;display:flex;flex-direction:column;gap:4px }
+.hist-ops li{ display:flex;align-items:baseline;gap:7px;font-size:12px;color:var(--text-2);min-width:0 }
+.hist-ops li::before{
+  content:"";flex:none;width:4px;height:4px;border-radius:50%;
+  background:var(--text-3);transform:translateY(-2px);
+}
+.hist-ops .hist-verb{ font-weight:600;color:var(--text);flex:none }
+.hist-ops code{
+  font:11.5px/1.5 var(--mono);color:var(--accent-ink);background:var(--accent-soft);
+  padding:.5px 5px;border-radius:5px;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.hist-ops li.hist-noop::before{ display:none }
+.hist-noop{ color:var(--text-3);font-style:italic }
+.hist-meta{
+  display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;
+  font-size:11px;color:var(--text-3);
+}
+.hist-revs{ display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums }
+.hist-revs code{ font-family:var(--mono);color:var(--text-3) }
+.hist-warn{ padding:1px 7px;border-radius:99px;background:var(--warn-soft);color:var(--warn-ink);font-weight:600 }
+.hist-warn.bad{ background:var(--bad-soft);color:var(--bad-ink) }
+.hist-f{ display:flex;align-items:center;gap:8px }
+.hist-f .btn{ font-size:11.5px;padding:5px 11px;flex:none }
+.hist-f .dbg-f-note{ flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis }
 .dbg-note.warn{ color:var(--warn-ink);background:var(--warn-soft);padding:8px 10px;border-radius:var(--r-sm) }
 .dbg-note.bad{ color:var(--bad-ink);background:var(--bad-soft);padding:8px 10px;border-radius:var(--r-sm) }
 .dbg-note.ok{ color:var(--ok-ink);background:var(--ok-soft);padding:8px 10px;border-radius:var(--r-sm) }
@@ -978,6 +1058,7 @@ textarea.dbg-ta:focus{ border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
   <div class="spacer"></div>
   <div class="kbd-hint"><kbd>⌘</kbd><kbd>K</kbd> 搜索</div>
   <div class="kbd-hint"><kbd>⌘</kbd><kbd>S</kbd> 保存</div>
+  <button class="btn hist-btn" id="histOpen" type="button" title="变更记录：谁在什么时候动了配置">变更<span class="dot" id="histDot" hidden></span></button>
   <button class="btn dbg-open" id="dbgOpen" type="button">调试台</button>
   <button class="btn primary top-save" id="topSave">保存</button>
 </header>
@@ -1236,6 +1317,27 @@ textarea.dbg-ta:focus{ border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
   </section>
 </div>
 
+<div class="dbg-backdrop" id="histBackdrop" hidden>
+  <section class="dbg hist" role="dialog" aria-modal="true" aria-labelledby="histTitle" aria-describedby="histDesc">
+    <header class="dbg-h">
+      <div class="dbg-h-t">
+        <h2 id="histTitle">变更记录</h2>
+        <p id="histDesc">谁在什么时候动了配置 · 来自服务端 audit.jsonl</p>
+      </div>
+      <span class="hist-rev" id="histRev">—</span>
+      <button class="icon-btn" id="histClose" type="button" aria-label="关闭变更记录" title="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <div class="hist-body" id="histBody"></div>
+    <footer class="dbg-f hist-f">
+      <span class="dbg-f-note" id="histFootText">—</span>
+      <button class="btn" id="histReload" type="button" hidden>重新加载配置</button>
+      <button class="btn" id="histRefresh" type="button">刷新</button>
+    </footer>
+  </section>
+</div>
+
 <script>
 "use strict";
 
@@ -1252,7 +1354,8 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 const API = {
   base: "", token: "", connected: false, demo: true, lastError: "",
   server: {}, upstream: [], merged: [], drift: null, schema: null,
-  tools: [], log: [], showUnknown: false
+  tools: [], log: [], showUnknown: false,
+  hist: [], histErr: "", staleRev: ""
 };
 const readSession = (k, def) => { try { return sessionStorage.getItem(k) || def } catch { return def } };
 const writeSession = (k, v) => { try { sessionStorage.setItem(k, v) } catch {} };
@@ -1267,6 +1370,12 @@ async function api(path, opts){
   opts = opts || {};
   const headers = Object.assign({}, opts.headers || {});
   if (API.token) headers["Authorization"] = "Bearer " + API.token;
+  /* 服务端优先按 X-Admin-Actor 记 actor；不带的话会落到 User-Agent，
+     时间线里就变成一串浏览器标识，分不清是面板改的还是 agent 改的。
+     ⚠️ 值必须是 ASCII：fetch 的头部是 ByteString，写中文会直接抛
+     "String contains non ISO-8859-1 code point"，连请求都发不出去。
+     人话标签放在 HIST_ACTOR 里映射，wire 上只走短标识。 */
+  if (!headers["X-Admin-Actor"]) headers["X-Admin-Actor"] = "panel";
   if (opts.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
   const t0 = performance.now();
   let res;
@@ -3903,11 +4012,206 @@ function dbgDemo(){
   toast("已切回演示数据");
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   11. 变更记录 —— 服务端 audit.jsonl 的只读时间线
+
+   为什么要有这一块：管理 API 对 agent 开放之后，配置可能在无人值守时被改。
+   面板能编辑，就必须能回答「这是谁改的」——否则出了事只能猜。
+
+   两条红线：
+     1. 只读。这个模块不调用任何写端点，也不提供「一键回滚」；
+        回滚是又一次写入，该走正常的编辑 + 保存，留下它自己的记录。
+     2. 不猜 actor。服务端记什么就显示什么，面板自己写入时带 X-Admin-Actor。
+   ══════════════════════════════════════════════════════════════════════ */
+const HIST_OP = {
+  "model.patch":      "改写模型",
+  "model.delete":     "清空覆盖",
+  "default.set":      "设为默认",
+  "default.delete":   "取消默认",
+  "disabled.add":     "下架",
+  "disabled.remove":  "上架",
+  "protocol.patch":   "改协议模板",
+  "protocol.delete":  "删协议模板",
+  "overlays.replace": "整体替换"
+};
+/* wire 上是 ASCII 标识，界面上给人话。原文留在 title 里，不隐藏事实。 */
+const HIST_ACTOR = { "panel": "控制面板" };
+const HIST_OUT = {
+  saved:    ["已保存", "ok"],
+  dry_run:  ["空跑",   "warn"],
+  rejected: ["被拒",   "bad"],
+  failed:   ["失败",   "bad"]
+};
+
+function histClip(v, n){
+  const t = String(v == null ? "" : v).trim();
+  return t.length > n ? t.slice(0, n - 1) + "…" : t;
+}
+/* 相对时间只用于「刚刚 / N 分钟前」，超过半天就回到绝对时刻 —— 
+   深夜看到「9 小时前」还要自己换算，不如直接给日期。 */
+function histWhen(iso){
+  const t = Date.parse(iso || "");
+  const pad = n => String(n).padStart(2, "0");
+  if (!isFinite(t)) return { short: iso || "—", full: iso || "" };
+  const d = new Date(t);
+  const full = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+               `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const m = Math.floor((Date.now() - t) / 60000);
+  let short;
+  if (m < 1) short = "刚刚";
+  else if (m < 60) short = m + " 分钟前";
+  else if (m < 720) short = Math.floor(m / 60) + " 小时前";
+  else short = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return { short, full };
+}
+
+function histRow(e){
+  const w = histWhen(e.time);
+  const oc = HIST_OUT[e.outcome] || [e.outcome || "—", ""];
+  const ops = (Array.isArray(e.ops) ? e.ops : []).map(o => {
+    const verb = HIST_OP[o.op] || o.op || "操作";
+    const tgt = o.target ? `<code title="${esc(o.target)}">${esc(o.target)}</code>` : "";
+    return `<li><span class="hist-verb">${esc(verb)}</span>${tgt}</li>`;
+  }).join("");
+  const tags = [
+    e.dry_run ? "<span>未落盘</span>" : "",
+    e.issues ? `<span class="hist-warn bad">${e.issues} 个问题</span>` : "",
+    e.warnings ? `<span class="hist-warn">${e.warnings} 条警告</span>` : "",
+    e.source === "mcp" ? "<span>经 MCP</span>" : ""
+  ].filter(Boolean).join("");
+  return `<div class="hist-row" data-outcome="${esc(e.outcome || "")}">
+    <div class="hist-rail"><span class="hist-dot"></span></div>
+    <div class="hist-card">
+      <div class="hist-h">
+        <time class="hist-when" datetime="${esc(e.time || "")}" title="${esc(w.full)}">${esc(w.short)}</time>
+        <span class="hist-out ${oc[1]}">${esc(oc[0])}</span>
+        <span class="hist-who" title="${esc(e.actor || "")}">${esc(histClip(HIST_ACTOR[e.actor] || e.actor || "未署名", 24))}</span>
+      </div>
+      <ul class="hist-ops">${ops || '<li class="hist-noop">没有操作明细</li>'}</ul>
+      <div class="hist-meta">
+        <span class="hist-revs"><code>${esc(histClip(e.revision_before || "空", 8))}</code>→<code>${esc(histClip(e.revision_after || "空", 8))}</code></span>
+        ${tags}
+      </div>
+    </div>
+  </div>`;
+}
+
+function histMark(){
+  const stale = !!API.staleRev;
+  const dot = $("#histDot"), btn = $("#histOpen"), reload = $("#histReload");
+  if (dot) dot.hidden = !stale;
+  if (btn){
+    btn.classList.toggle("stale", stale);
+    btn.title = stale ? "配置已被其他会话改动 · 点开看变更记录"
+                      : "变更记录：谁在什么时候动了配置";
+  }
+  if (reload) reload.hidden = !stale;
+}
+
+function histRender(){
+  const body = $("#histBody"), foot = $("#histFootText"), rev = $("#histRev");
+  if (!body) return;
+  if (rev) rev.textContent = API.revision ? "rev " + histClip(API.revision, 8) : "— rev";
+
+  if (API.demo){
+    body.innerHTML = `<div class="hist-empty">未连接真实服务，读不到变更记录。<br>
+      记录由服务端写在 <code>audit.jsonl</code>，演示数据里没有这一层。<br>
+      <button class="btn" type="button" data-hist="connect">去连接</button></div>`;
+    if (foot) foot.textContent = "未连接服务 · 演示数据";
+    histMark();
+    return;
+  }
+  if (API.histErr){
+    body.innerHTML = `<div class="hist-empty">读取失败：${esc(API.histErr)}</div>`;
+    if (foot) foot.textContent = "读取失败 —— 点「刷新」重试";
+    histMark();
+    return;
+  }
+  const list = API.hist || [];
+  if (!list.length){
+    body.innerHTML = `<div class="hist-empty">还没有变更记录。<br>
+      只有经过管理 API 的写入才会留痕，手改 <code>config.yaml</code> 不会。<br>
+      先改一个参数并保存，这里就会出现第一条。</div>`;
+    if (foot) foot.textContent = "0 条";
+    histMark();
+    return;
+  }
+  /* 服务端按时间正序给（追加写日志的自然顺序）。这里翻过来：
+     打开这一页的人问的是「刚才谁动了」，最新的一条该在最上面。 */
+  body.innerHTML = list.slice().reverse().map(histRow).join("");
+  if (foot) foot.textContent = `最近 ${list.length} 条 · 从新到旧 · 服务端最多留 200 条`;
+  histMark();
+}
+
+async function histLoad(){
+  if (API.demo){ API.hist = []; API.histErr = ""; histRender(); return }
+  try {
+    const r = await api("/admin/history?limit=50");
+    const d = r.data || {};
+    API.hist = Array.isArray(d.entries) ? d.entries : [];
+    API.histErr = "";
+  } catch (e){
+    API.hist = [];
+    API.histErr = e.status === 401
+      ? "服务身份未通过校验（401）：先在调试台填 api_key"
+      : (e.message || "读取失败");
+  }
+  histRender();
+}
+
+/* 只取 version 做比对，不拉整份状态：窗口回到前台时也要足够便宜。 */
+async function histCheck(){
+  if (API.demo || !API.connected || !API.revision || document.hidden) return;
+  try {
+    const r = await api("/admin/history?limit=1");
+    const rev = (r.data && r.data.revision) || "";
+    const next = rev && rev !== API.revision ? rev : "";
+    if (next !== API.staleRev){
+      API.staleRev = next;
+      histMark();
+    }
+  } catch { /* 后台探测失败不打扰正在编辑的人 */ }
+}
+
+function histOpen(){
+  const bd = $("#histBackdrop");
+  if (!bd) return;
+  bd.hidden = false;
+  requestAnimationFrame(() => bd.classList.add("on"));
+  histLoad();
+  $("#histClose").focus({ preventScroll: true });
+}
+function histClose(){
+  const bd = $("#histBackdrop");
+  if (!bd || bd.hidden) return;
+  bd.classList.remove("on");
+  setTimeout(() => { bd.hidden = true }, prefersReduced() ? 0 : 340);
+}
+
+/* 重新加载会丢掉草稿，所以有脏改动时必须先问 —— 不做「悄悄覆盖」。 */
+async function histReloadNow(){
+  if (anyDirty() && !confirm("当前有未保存的改动，重新加载会丢弃它们。继续？")) return;
+  const doc = await boot();
+  applyBootDoc(doc);
+  API.staleRev = "";
+  dbgRerender();
+  histLoad();
+  toast(doc.demo ? "重新加载失败，仍是演示数据" : "已重新加载服务端配置");
+}
+
 /* ── 事件绑定 ─────────────────────────────────────────────────────── */
 function bindDebug(){
   const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn) };
   const open = () => dbgOpen(state.dbgTab);
   on("#dbgOpen", "click", open);
+  on("#histOpen", "click", histOpen);
+  on("#histClose", "click", histClose);
+  on("#histRefresh", "click", histLoad);
+  on("#histReload", "click", histReloadNow);
+  on("#histBackdrop", "click", e => { if (e.target.id === "histBackdrop") histClose() });
+  on("#histBody", "click", e => {
+    if (e.target.closest('[data-hist="connect"]')){ histClose(); dbgOpen("probe") }
+  });
   on("#connChip", "click", () => dbgOpen("probe"));
   on("#connBannerBtn", "click", () => dbgOpen("probe"));
   on("#dbgClose", "click", dbgClose);
@@ -3917,7 +4221,10 @@ function bindDebug(){
     if (b) dbgSwitchTab(b.dataset.dt);
   });
   document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !$("#dbgBackdrop").hidden){ e.preventDefault(); dbgClose() }
+    if (e.key !== "Escape") return;
+    /* 两个浮层可以叠着：先关最后打开的那个 */
+    if (!$("#histBackdrop").hidden){ e.preventDefault(); histClose(); return }
+    if (!$("#dbgBackdrop").hidden){ e.preventDefault(); dbgClose() }
   });
 
   on("#connBtn", "click", dbgReconnect);
@@ -3987,6 +4294,12 @@ async function init(){
       { server: API.server, upstream_ok: !API.upstreamError, count: API.upstream.length, drift: API.drift }, true);
     dbgLoadSchema(true);
     dbgLoadTools(true);
+
+    /* 配置可能被 agent 或另一个标签页改掉。回到前台时对一次版本号，
+       只把「变更」按钮点亮，不弹窗 —— 正在编辑的人不该被后台改动打断。 */
+    window.addEventListener("focus", histCheck);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) histCheck() });
+    histMark();
   }
 
   let rt = 0;

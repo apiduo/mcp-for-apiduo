@@ -1083,6 +1083,28 @@ REST 侧相反，默认直接写 —— 会手写 HTTP 的调用方已经是显�
 `actor` 取 `body.actor` > `X-Admin-Actor` > `User-Agent`。被拒绝的写入也记
 （`outcome: rejected`），因为「agent 在凌晨试了什么」和「它改成了什么」同样重要。
 
+#### 面板上的变更记录
+
+后端有了时间线，面板就必须把它显示出来 —— 否则「agent 半夜改了配置」这件事，
+仍然只有会写 `curl` 的人才能发现。顶栏「变更」打开一条只读时间线：
+
+- 每条一行：相对时间（超过半天回到绝对时刻）+ 结果胶囊（已保存 / 空跑 / 被拒 / 失败）
+  + actor + 操作与目标 + 版本 `A → B`；`issues` / `warnings` / `经 MCP` 作为标签附在下方。
+- **最新在最上面**。服务端按追加顺序正序返回，面板翻过来 —— 打开它的人问的是「刚才谁动了」。
+- 只读，**不提供一键回滚**。回滚是一次新的写入，该走正常的编辑 + 保存，并留下它自己的记录；
+  给个「撤销」按钮，等于允许两个人互相覆盖审计。
+- 高度跟着条数走（`height:auto` + `max-height`）：5 条时不留一大片空白，多了才封顶内滚。
+
+这里有个必须踩过才知道的坑：**自定义请求头的值只能是 ASCII**。最初把 `X-Admin-Actor`
+写成「控制面板」，`fetch` 直接抛 `String contains non ISO-8859-1 code point`，
+于是**所有** `/admin/*` 请求全挂（不只是变更记录这一处）。页面表现为「演示数据」，
+看起来像鉴权失败，实际是请求根本没发出去。现在 wire 上是 `panel`，界面按 `HIST_ACTOR`
+映射成人话，原始值留在 `title` 里。
+
+外部改动**不打断编辑**：窗口回到前台时只取一次 `/admin/history?limit=1` 比对 `revision`，
+不一致就把「变更」按钮点亮（小圆点 + 蓝色描边），不弹窗、不移焦点。点开面板才出现
+「重新加载配置」，而且有未保存草稿时先问一句 —— 不做悄悄覆盖。
+
 #### 刻意不做的
 
 | 想加的 | 不加的理由 |
@@ -1249,6 +1271,7 @@ python3 testdata/mock_upstream.py 3999 &
 | 管理端 MCP：`config.get/models/model/drift/history/apply`，写工具默认空跑 | ✅ |
 | 变更记录 `<config>.audit.jsonl` + `GET /admin/history` | ✅ |
 | 面板适配 `revision`（保存带 If-Match，409 提示刷新而不是盲目重发） | ✅ |
+| 变更记录面板（谁在什么时候动了配置 · 外部改动只点亮按钮，不打断编辑） | ✅ |
 | 校验分级（`issues` 阻断 / `warnings` 放行） | ✅ |
 | 整条下架 `disabled` + 漂移自查 `GET /admin/drift` | ✅ |
 | 协议族模板 `protocols`（按 kind 补缺 / `_protocol` 显式指定 / 漂移 `inherited`） | ✅ |
