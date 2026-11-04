@@ -1040,6 +1040,17 @@ python3 testdata/mock_upstream.py 3999 &
 | 限流、审计、调用记录 | ⬜ 未做 |
 | 提示词改写（`/v1/chat/completions`） | ⬜ 未做 |
 
+### 发版（push main 即发版）
+
+`.github/workflows/release.yml`：推到 `main` → 自增 patch（`v0.0.1` → `v0.0.2`）→ 跑 `go vet` + `go test`
+→ 交叉编译五个平台到 `dist/` → 冒烟断言二进制**自报版本**等于发布版本 → 打 annotated tag → 建 Release
+（附 `SHA256SUMS`）。
+
+- **版本号只活在 tag 里**，不写回任何文件。要 minor / major 就人工打 tag，下一次自增以它为基线。
+- 不想发版的提交（纯文档、注释）在提交信息里写 `[skip release]`，整场跳过；漏了就 `workflow_dispatch` 补跑。
+- 顺序是「先出产物、再打 tag」：构建或冒烟失败不会留下有 tag、没产物的半成品；Release 步骤幂等，可重跑。
+- 五个平台：`linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`、`windows/amd64`。
+
 ## 13. 文档
 
 - [`docs/NewAPI图片MCP扩展中心解决方案.md`](docs/NewAPI图片MCP扩展中心解决方案.md) — V1.0 完整目标方案（含控制面与扩展中心形态，属于进阶阶段）
