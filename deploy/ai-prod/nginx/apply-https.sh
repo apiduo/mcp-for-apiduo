@@ -77,19 +77,26 @@ S80=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $HOST" http://127.0.0.1/h
 S443=$(curl -sk -o /dev/null -w '%{http_code}' $R "https://$HOST/healthz")
 ROOT=$(curl -sk $R "https://$HOST/" | grep -o '"mcp":"/mcp"' | head -1)
 ADMIN=$(curl -sk -o /dev/null -w '%{http_code}' $R "https://$HOST/admin/ui")
-INIT=$(curl -sk $R -H 'Content-Type: application/json' \
+INIT_BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
+# 匿名必须 401：没有这道闸，服务会回落到内置服务 key（等于对全网开放额度）
+ANON=$(curl -sk -o /dev/null -w '%{http_code}' $R -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         -H 'MCP-Protocol-Version: 2025-06-18' \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' \
-        "https://$HOST/mcp" | grep -o '"serverInfo"' | head -1)
+        -d "$INIT_BODY" "https://$HOST/mcp")
+TOKEN=$(cat /root/.mcp-apiduo-token 2>/dev/null || true)
+INIT=$(curl -sk $R -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -H 'MCP-Protocol-Version: 2025-06-18' \
+        -d "$INIT_BODY" "https://$HOST/mcp" | grep -o '"serverInfo"' | head -1)
 
 printf '%-34s %s\n' ":80 /healthz → 301"        "$S80"
 printf '%-34s %s\n' ":443 /healthz"             "$S443"
 printf '%-34s %s\n' ":443 / （服务说明）"        "${ROOT:-<缺失>}"
 printf '%-34s %s\n' ":443 /admin/ui → 404"      "$ADMIN"
-printf '%-34s %s\n' ":443 /mcp initialize"      "${INIT:-<无 serverInfo>}"
+printf '%-34s %s\n' ":443 /mcp 匿名 → 401"      "$ANON"
+printf '%-34s %s\n' ":443 /mcp 带 key → init"   "${INIT:-<无 serverInfo>}"
 
-if [ "$S80" = "301" ] && [ "$S443" = "200" ] && [ -n "$ROOT" ] && [ "$ADMIN" = "404" ] && [ -n "$INIT" ]; then
+if [ "$S80" = "301" ] && [ "$S443" = "200" ] && [ -n "$ROOT" ] && [ "$ADMIN" = "404" ] && [ "$ANON" = "401" ] && [ -n "$INIT" ]; then
   echo "✅ 全部通过：https://$HOST/mcp"
 else
   echo "❌ 有断言未通过，见上表"
