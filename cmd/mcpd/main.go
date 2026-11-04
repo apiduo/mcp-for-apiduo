@@ -37,6 +37,7 @@ func main() {
 		uiPath     = flag.String("ui", "prototype/admin.html", "管理端页面文件路径；为空则不托管")
 		schemaPath = flag.String("schema", "packages/model-capabilities.schema.json", "模型能力契约文件路径；为空则不提供 /admin/schema")
 		cacheTTL   = flag.Duration("models-cache-ttl", 30*time.Second, "管理端读路径缓存上游模型列表的时长；0 表示关闭")
+		trustProxy = flag.String("trust-proxy", "", "在反向代理后面时设为 x-real-ip，审计日志才会记真实来源（默认关闭）")
 	)
 	flag.Parse()
 
@@ -61,6 +62,7 @@ func main() {
 	adm.UIPath = *uiPath
 	adm.SchemaPath = *schemaPath
 	adm.SetModelCacheTTL(*cacheTTL)
+	adm.TrustProxy = strings.EqualFold(strings.TrimSpace(*trustProxy), "x-real-ip")
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-for-apiduo", Version: version}, nil)
 	deps := &tools.Deps{Up: up, Overlays: adm.Overlays, CacheTTL: 60 * time.Second}

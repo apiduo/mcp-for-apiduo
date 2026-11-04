@@ -28,8 +28,10 @@ services:
     volumes:
       # 覆盖层、审计日志都写在这里；容器以 uid 65532 运行，宿主目录需 chown 65532
       - /www/data/mcp-for-apiduo:/app/conf
-    # 默认走环境变量；这里显式给配置文件，才能有「热更新 + 覆盖层持久化 + 审计」
-    command: ["-config", "/app/conf/config.yaml"]
+    # 默认走环境变量；这里显式给配置文件，才能有「热更新 + 覆盖层持久化 + 审计」。
+    # -trust-proxy：容器里看到的对端是 Docker 网关而不是 127.0.0.1，
+    # 不声明这层关系的话，审计日志里的「来源」永远是内网地址。
+    command: ["-config", "/app/conf/config.yaml", "-trust-proxy", "x-real-ip"]
     environment:
       TZ: Asia/Shanghai
     # 与 apiduo（new-api）同网络，用容器名直连，避免 127.0.0.1:39045 跨容器不可达

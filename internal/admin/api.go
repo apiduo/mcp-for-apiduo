@@ -55,7 +55,7 @@ func (h *Handler) handleOps(w http.ResponseWriter, r *http.Request) {
 		Ops:     in.Ops,
 		Actor:   orDefault(in.Actor, actorFromRequest(r)),
 		Source:  "rest",
-		Remote:  remoteOf(r),
+		Remote:  h.remoteOf(r),
 		DryRun:  in.DryRun || isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -221,7 +221,7 @@ func (h *Handler) handlePatchModel(w http.ResponseWriter, r *http.Request) {
 		Ops:     []Op{{Op: "model.patch", Model: id, Patch: patch}},
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  remoteOf(r),
+		Remote:  h.remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -240,7 +240,7 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		Ops:     []Op{{Op: "model.delete", Model: id}},
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  remoteOf(r),
+		Remote:  h.remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -255,7 +255,7 @@ func (h *Handler) handleDefault(w http.ResponseWriter, r *http.Request) {
 	req := commitRequest{
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  remoteOf(r),
+		Remote:  h.remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	}
@@ -304,7 +304,7 @@ func (h *Handler) handleDisabled(w http.ResponseWriter, r *http.Request) {
 		Ops:     []Op{op},
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  remoteOf(r),
+		Remote:  h.remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	})
@@ -319,7 +319,7 @@ func (h *Handler) handleProtocol(w http.ResponseWriter, r *http.Request) {
 	req := commitRequest{
 		Actor:   actorFromRequest(r),
 		Source:  "rest",
-		Remote:  remoteOf(r),
+		Remote:  h.remoteOf(r),
 		DryRun:  isDryRun(r),
 		IfMatch: r.Header.Get("If-Match"),
 	}

@@ -1442,7 +1442,8 @@ nginx 侧也改成 `^Bearer[ \t]+\S`。两层各说各的，所以要两层都�
 
 顺手补的几处（都不改变对外契约）：服务端 API key 比较改常量时间；
 `http.Server` 补 `ReadTimeout` / `IdleTimeout`（不设 `WriteTimeout`，否则 5 分钟的
-同步生成会被掐断）；审计记 `X-Real-IP`（只在直连方是本机时采信，否则永远是 127.0.0.1）；
+同步生成会被掐断）；审计记 `X-Real-IP`（需 `-trust-proxy=x-real-ip` 显式声明，且对端必须是内网地址；
+容器里看到的对端是 Docker 网关而不是 127.0.0.1，这条声明不能省）；
 审计文件超过 8 MiB 裁到最近 500 行；`/admin/ui` 下发 CSP / `X-Frame-Options` / `nosniff`，
 vhost 加 HSTS。
 

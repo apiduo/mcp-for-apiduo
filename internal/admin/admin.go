@@ -64,6 +64,10 @@ type Handler struct {
 	// Version 随 /admin/state 暴露，便于确认页面连的是哪个进程。
 	Version string
 
+	// TrustProxy 声明「本服务在反向代理后面」，允许从 X-Real-IP 取真实来源。
+	// 默认关闭：没有这层声明时，任何请求头都只是调用方的自述。
+	TrustProxy bool
+
 	audit *auditLog
 
 	// modelCache 缓存上游模型列表，只服务读路径（见 cache.go）。
@@ -472,7 +476,7 @@ func (h *Handler) handleOverlays(w http.ResponseWriter, r *http.Request) {
 			Ops:     []Op{{Op: "overlays.replace", Overlays: &next}},
 			Actor:   actorFromRequest(r),
 			Source:  "rest",
-			Remote:  remoteOf(r),
+			Remote:  h.remoteOf(r),
 			DryRun:  isDryRun(r),
 			IfMatch: r.Header.Get("If-Match"),
 		})
@@ -559,21 +563,37 @@ func isDryRun(r *http.Request) bool {
 
 // remoteOf 取调用方地址，给审计日志用。
 //
-// 生产上服务只绑回环、前面一定是 nginx，直接读 RemoteAddr 永远是 127.0.0.1 ——
-// 时间线里「谁改的」就只剩一个 actor 字符串，出了事定位不到来源。
-// X-Real-IP 由 nginx 用 $remote_addr 覆盖写入（不像 X-Forwarded-For 可以追加伪造），
-// 且只在「直连方是本机」时才采信：服务一旦被直接暴露，这个头就不可信了。
-func remoteOf(r *http.Request) string {
+// 生产上服务在容器里，前面是宿主机 nginx：容器看到的对端永远是 Docker 网关
+// （实测 172.30.41.1:9608），不是 127.0.0.1 —— 直接读 RemoteAddr 的话，
+// 时间线里「谁改的」永远是一串内网地址，出了事定位不到来源。
+//
+// 所以采信 X-Real-IP 需要两个条件同时成立：
+//   - 部署者用 -trust-proxy=x-real-ip 显式声明「我在反代后面」（默认关闭）；
+//   - 对端不是公网地址。服务一旦被直接暴露在公网，这个头就是调用方随手写的。
+//
+// X-Real-IP 比 X-Forwarded-For 可靠：它由 nginx 用 $remote_addr 覆盖写入，
+// 而 XFF 是追加的，第一段可以伪造。
+func (h *Handler) remoteOf(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if h.TrustProxy && !IsPublicPeer(host) {
 		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
 			return v
 		}
 	}
-	return r.RemoteAddr
+	return host
+}
+
+// IsPublicPeer 判断对端是不是公网地址。名字带 Peer 是为了和 catalog 里的
+// 「模型能力」区分开：这里只回答「这条连接是不是从外面直连进来的」。
+func IsPublicPeer(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // 解析不出来就当作不可信，走 RemoteAddr
+	}
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
 }
 
 func actorFromRequest(r *http.Request) string {

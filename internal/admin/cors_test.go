@@ -181,3 +181,37 @@ func TestUIShipsSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestRemoteOf 锁住审计来源的取值规则。
+//
+// 线上实测：容器里看到的对端是 Docker 网关 172.30.41.1:9608，
+// 所以「只信 loopback」那条规则在生产上等于没生效。
+func TestRemoteOf(t *testing.T) {
+	h := newTestHandler(t)
+	cases := []struct {
+		name  string
+		peer  string
+		xri   string
+		trust bool
+		want  string
+	}{
+		{"默认不采信头", "172.30.41.1:9608", "203.0.113.9", false, "172.30.41.1"},
+		{"反代之后取真实来源", "172.30.41.1:9608", "203.0.113.9", true, "203.0.113.9"},
+		{"公网直连不采信头", "8.8.8.8:1234", "203.0.113.9", true, "8.8.8.8"},
+		{"本机直连可用头", "127.0.0.1:5555", "203.0.113.9", true, "203.0.113.9"},
+		{"没有头就回落", "172.30.41.1:9608", "", true, "172.30.41.1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h.TrustProxy = c.trust
+			req := httptest.NewRequest(http.MethodPost, "/admin/ops", nil)
+			req.RemoteAddr = c.peer
+			if c.xri != "" {
+				req.Header.Set("X-Real-IP", c.xri)
+			}
+			if got := h.remoteOf(req); got != c.want {
+				t.Fatalf("得到 %q，期望 %q", got, c.want)
+			}
+		})
+	}
+}
