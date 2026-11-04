@@ -1,26 +1,34 @@
-// Package config 负责两项部署配置的加载、校验与热更新。
+// Package config 是配置文件唯一的读者与写者。
 //
 // 设计约束（见 README §3）：
-//   - 只有两项：base_url、api_key。
+//   - 部署配置只有两项：base_url、api_key；同一份文件里还有管理端覆盖层。
+//   - 两者必须由同一个 Store 持有：早先 config 读部署项、admin 自己存一份覆盖层快照，
+//     手改文件后覆盖层不生效（README §11「已知问题」），根因是同一份文件有两个读者。
 //   - 优先级：配置文件 > 环境变量；配置文件里的空值不覆盖已有值。
 //   - 热更新：按 mtime 轮询，原子切换，失败保留旧值。
 //   - 每次变更都校验 base_url —— 它决定带着用户的 key 往哪发请求。
+//   - 写回不重排、不删注释：这份文件是人读的，也是 git diff 的对象。
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/apiduo/mcp-for-apiduo/internal/catalog"
 )
 
-// Config 是运行时配置。两项，别加第三项。
+// Config 是运行时部署配置。两项，别加第三项。
 type Config struct {
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
@@ -89,19 +97,31 @@ func FromEnv() Config {
 	return c
 }
 
-// fileDoc 是配置文件的顶层结构：
+// Doc 是一次发布出去的全部事实：部署配置 + 管理端覆盖层 + 版本号。
+//
+// 三者同时切换（atomic.Pointer 指向不可变快照），所以运行中不会出现
+// 「新 base_url 配旧覆盖层」这种半更新状态。
+type Doc struct {
+	Config   Config
+	Overlays catalog.Overlays
+	Revision string // 覆盖层内容哈希，对外作为 ETag
+}
+
+// fileDoc 是配置文件的结构：
 //
 //	base_url: https://api.example.com/v1   # 或只写 https://api.example.com（自动补 /v1）
 //	api_key: sk-xxx
+//	models: {...}
+//	settings: {defaults: {...}}
+//	disabled: [...]
+//	protocols: {...}
 type fileDoc struct {
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
-	// 允许同一份文件里放管理端数据（models / settings / disabled / protocols），此处不解析，
-	// 由 admin/catalog 各自读取，避免配置文件格式分裂成两份。
-	Models    map[string]any `yaml:"models"`
-	Settings  map[string]any `yaml:"settings"`
-	Disabled  []string       `yaml:"disabled"`
-	Protocols map[string]any `yaml:"protocols"`
+	BaseURL   string                    `yaml:"base_url"`
+	APIKey    string                    `yaml:"api_key"`
+	Models    map[string]map[string]any `yaml:"models"`
+	Settings  catalog.Settings          `yaml:"settings"`
+	Disabled  []string                  `yaml:"disabled"`
+	Protocols map[string]map[string]any `yaml:"protocols"`
 }
 
 // MergeFile 把文件内容叠加到 base 上：非空值覆盖，空值保持。
@@ -119,30 +139,65 @@ func MergeFile(base Config, doc fileDoc) Config {
 	return out
 }
 
-// Store 持有当前配置，支持原子读取与热替换。
-type Store struct {
-	cur atomic.Pointer[Config]
+// Overlays 从文件内容里取覆盖层。缺失的段按空处理，不报错。
+func (d fileDoc) Overlays() catalog.Overlays {
+	return catalog.Overlays{
+		Models:    d.Models,
+		Settings:  d.Settings,
+		Disabled:  d.Disabled,
+		Protocols: d.Protocols,
+	}.Canonical()
+}
 
-	path     string        // 配置文件路径，空表示不启用热更新
+// Revision 计算覆盖层的内容版本。
+//
+// 用内容哈希而不是自增计数：多副本挂同一份文件时，各副本独立算出同一个版本号，
+// 不需要额外的协调；重启也不会让版本号跳跃。输入必须是规范形式，否则
+// 同一个集合换个顺序就会得到不同的版本，客户端会以为配置被改过。
+func Revision(ov catalog.Overlays) string {
+	b, err := json.Marshal(ov.Canonical())
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// Store 持有当前文档，支持原子读取与热替换。
+type Store struct {
+	cur atomic.Pointer[Doc]
+
+	path     string        // 配置文件路径，空表示纯内存（不落盘、不轮询）
 	interval time.Duration // 轮询间隔
+
+	// mu 串行化「轮询重载」与「管理端写入」。
+	// 两者都读写 lastMod/lastSize 与磁盘，不串行化就会出现
+	// 「刚写完的文件被另一个 goroutine 当成外部变更再解析一遍」。
+	mu       sync.Mutex
 	lastMod  time.Time
 	lastSize int64
 
-	stop chan struct{}
-	done chan struct{}
+	stop      chan struct{}
+	done      chan struct{}
+	startOnce sync.Once
+	closeOnce sync.Once
 
 	// Err 记录最近一次重载失败的原因，成功时清空。供 /healthz 暴露。
 	err atomic.Pointer[string]
 
-	// onReload 在每次成功重载后调用。上层用它失效与配置相关的缓存：
-	// base_url 变了，缓存的模型列表就属于旧上游，必须丢掉。
-	onReload func()
+	// listeners 在每次文档切换后调用（热更新与管理端保存都算）。
+	// 上层用它失效与配置相关的缓存：base_url 变了，缓存的模型列表就属于旧上游。
+	listeners []func()
 }
 
 // OnReload 注册重载回调。必须在 Start 之前调用。
-func (s *Store) OnReload(fn func()) { s.onReload = fn }
+func (s *Store) OnReload(fn func()) {
+	if fn != nil {
+		s.listeners = append(s.listeners, fn)
+	}
+}
 
-// NewStore 加载初始配置。path 为空时只读环境变量，不启用热更新。
+// NewStore 加载初始文档。path 为空时只读环境变量，不启用热更新。
 func NewStore(path string, interval time.Duration) (*Store, error) {
 	if interval <= 0 {
 		interval = 2 * time.Second
@@ -150,25 +205,48 @@ func NewStore(path string, interval time.Duration) (*Store, error) {
 	s := &Store{path: path, interval: interval, stop: make(chan struct{}), done: make(chan struct{})}
 
 	cfg := FromEnv()
+	ov := catalog.Overlays{}.Canonical()
 	if path != "" {
-		next, mod, size, err := loadFile(path, cfg)
+		doc, mod, size, err := loadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		cfg = next
+		cfg = MergeFile(cfg, doc)
+		ov = doc.Overlays()
 		s.lastMod, s.lastSize = mod, size
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	s.cur.Store(&cfg)
+	s.publish(cfg, ov)
 	return s, nil
 }
 
-// Get 返回当前配置。读路径无锁。
-func (s *Store) Get() Config {
-	return *s.cur.Load()
+func (s *Store) publish(cfg Config, ov catalog.Overlays) {
+	ov = ov.Canonical()
+	s.cur.Store(&Doc{Config: cfg, Overlays: ov, Revision: Revision(ov)})
 }
+
+// Get 返回当前部署配置。读路径无锁。
+func (s *Store) Get() Config {
+	return s.cur.Load().Config
+}
+
+// Overlays 返回当前覆盖层快照。
+//
+// 返回值与内部快照共享 map，调用方只读。需要改就 Clone 之后再改 ——
+// 就地改会绕过校验与落盘，直接改到运行时。
+func (s *Store) Overlays() catalog.Overlays {
+	return s.cur.Load().Overlays
+}
+
+// Revision 返回当前覆盖层版本（内容哈希）。
+func (s *Store) Revision() string {
+	return s.cur.Load().Revision
+}
+
+// Path 返回配置文件路径，空表示纯内存模式。
+func (s *Store) Path() string { return s.path }
 
 // LastError 返回最近一次重载的错误（可能为 nil）。
 func (s *Store) LastError() string {
@@ -180,21 +258,21 @@ func (s *Store) LastError() string {
 
 // Start 启动 mtime 轮询。未设置配置文件时立即返回，不产生 goroutine。
 func (s *Store) Start() {
-	if s.path == "" {
-		close(s.done)
-		return
-	}
-	go s.loop()
+	s.startOnce.Do(func() {
+		if s.path == "" {
+			close(s.done)
+			return
+		}
+		go s.loop()
+	})
 }
 
 // Close 停止轮询。
 func (s *Store) Close() {
-	select {
-	case <-s.stop:
-	default:
+	s.closeOnce.Do(func() {
 		close(s.stop)
-	}
-	<-s.done
+		<-s.done
+	})
 }
 
 func (s *Store) loop() {
@@ -206,38 +284,104 @@ func (s *Store) loop() {
 		case <-s.stop:
 			return
 		case <-t.C:
-			s.reload()
+			s.Reload()
 		}
 	}
 }
 
-// reload 只在 mtime/size 变化时真正解析，避免每秒读盘解析。
-func (s *Store) reload() {
+// Reload 立即检查一次文件是否变化，变了就原子切换。
+//
+// 轮询每 interval 调一次；测试与运维排障可以直接调，不必等下一个 tick。
+func (s *Store) Reload() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reloadLocked() {
+		s.notify()
+	}
+}
+
+// reloadLocked 只在 mtime/size 变化时真正解析，避免每秒读盘解析。
+// 返回是否发布了新文档；不触发回调（由调用方决定何时通知）。
+func (s *Store) reloadLocked() bool {
+	if s.path == "" {
+		return false
+	}
 	st, err := os.Stat(s.path)
 	if err != nil {
 		s.setErr(fmt.Sprintf("stat 配置失败: %v", err))
-		return
+		return false
 	}
 	if st.ModTime().Equal(s.lastMod) && st.Size() == s.lastSize {
-		return
+		return false
 	}
 
-	next, _, _, err := loadFile(s.path, FromEnv())
+	doc, _, _, err := loadFile(s.path)
 	if err != nil {
 		// 失败保留旧值：运维存了个半截文件，不该让整个服务不可用。
 		s.setErr(err.Error())
-		return
+		return false
 	}
-	if err := next.Validate(); err != nil {
+	cfg := MergeFile(FromEnv(), doc)
+	if err := cfg.Validate(); err != nil {
 		s.setErr(err.Error())
-		return
+		return false
 	}
 
-	s.cur.Store(&next)
+	s.publish(cfg, doc.Overlays())
 	s.lastMod, s.lastSize = st.ModTime(), st.Size()
 	s.err.Store(nil)
-	if s.onReload != nil {
-		s.onReload()
+	return true
+}
+
+// ErrRevisionChanged 表示从读到写之间，覆盖层被其他进程改过了。
+var ErrRevisionChanged = errors.New("覆盖层已被其他进程修改")
+
+// ReplaceOverlays 以 next 替换覆盖层：落盘、发布、通知。
+func (s *Store) ReplaceOverlays(next catalog.Overlays) (string, error) {
+	return s.ReplaceOverlaysIf(next, "")
+}
+
+// ReplaceOverlaysIf 是带比较的写入：expect 非空且与当前版本不符时拒绝写。
+//
+// 这是真正的 compare-and-swap，而不是「先读后写」：调用方算新状态用的是一个版本，
+// 写盘前再确认那个版本还在。少了这一步，两个副本并发写就是后写的静默覆盖先写的
+// —— 而覆盖的是别人的配置，且没有任何痕迹。
+//
+// 顺序是先落盘再发布：写失败时内存保持旧值，不会出现「面板显示已保存、
+// 重启后丢失」这种两处不一致。
+//
+// 写之前先吸收磁盘上的外部改动（例如运维刚手改了 base_url），
+// 避免把别人的部署配置覆盖回去。
+func (s *Store) ReplaceOverlaysIf(next catalog.Overlays, expect string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	next = next.Canonical()
+	s.reloadLocked()
+	if expect != "" && s.Revision() != expect {
+		return s.Revision(), ErrRevisionChanged
+	}
+	cfg := s.cur.Load().Config
+
+	if s.path != "" {
+		if err := writeOverlays(s.path, next); err != nil {
+			s.setErr(err.Error())
+			return s.Revision(), err
+		}
+		if st, err := os.Stat(s.path); err == nil {
+			s.lastMod, s.lastSize = st.ModTime(), st.Size()
+		}
+	}
+
+	s.publish(cfg, next)
+	s.err.Store(nil)
+	s.notify()
+	return s.Revision(), nil
+}
+
+func (s *Store) notify() {
+	for _, fn := range s.listeners {
+		fn()
 	}
 }
 
@@ -246,14 +390,14 @@ func (s *Store) setErr(msg string) {
 	s.err.Store(&m)
 }
 
-func loadFile(path string, base Config) (Config, time.Time, int64, error) {
+func loadFile(path string) (fileDoc, time.Time, int64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, time.Time{}, 0, fmt.Errorf("读配置失败: %w", err)
+		return fileDoc{}, time.Time{}, 0, fmt.Errorf("读配置失败: %w", err)
 	}
 	var doc fileDoc
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return Config{}, time.Time{}, 0, fmt.Errorf("解析配置失败: %w", err)
+		return fileDoc{}, time.Time{}, 0, fmt.Errorf("解析配置失败: %w", err)
 	}
 	st, _ := os.Stat(path)
 	var mod time.Time
@@ -261,31 +405,136 @@ func loadFile(path string, base Config) (Config, time.Time, int64, error) {
 	if st != nil {
 		mod, size = st.ModTime(), st.Size()
 	}
-	return MergeFile(base, doc), mod, size, nil
+	return doc, mod, size, nil
 }
 
-// LoadFileDoc 读取完整的配置文件（含 models / settings 段），供管理端使用。
-func LoadFileDoc(path string) (fileDoc, error) {
+// sectionNames 是覆盖层在文件里的四个顶层键，写回时按这个顺序补新键。
+var sectionNames = []string{"models", "settings", "disabled", "protocols"}
+
+// writeOverlays 把覆盖层写回配置文件，保留其余键、键序与注释。
+//
+// 为什么不用「读成 map 再整体 Marshal」：那会把 base_url 下面的注释、
+// 键的排列顺序全部抹掉。这份文件是人维护的、要进 git diff 的，
+// 一次面板保存就把它洗成机器格式，是不可接受的副作用。
+//
+// 做法是直接编辑 YAML 语法树：只替换这四个键的值节点，其余节点原样保留。
+func writeOverlays(path string, ov catalog.Overlays) error {
+	var root yaml.Node
+
 	data, err := os.ReadFile(path)
-	if err != nil {
-		return fileDoc{}, err
+	switch {
+	case err == nil && len(strings.TrimSpace(string(data))) > 0:
+		if err := yaml.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("解析现有配置失败（拒绝覆盖）: %w", err)
+		}
+	case err == nil:
+		// 空文件：从空映射开始。
+		root = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	case os.IsNotExist(err):
+		// 启动时文件存在、写入前不见了。拒绝凭空重建：新文件里不会有
+		// base_url / api_key，服务重启后会悄悄回落到默认上游 —— 这比报错危险得多。
+		return errors.New("配置文件已不存在，拒绝用覆盖层重建（重建会丢失 base_url / api_key）")
+	default:
+		return fmt.Errorf("读配置失败: %w", err)
 	}
-	var doc fileDoc
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fileDoc{}, err
+
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return errors.New("配置文件顶层必须是键值映射，拒绝改写")
 	}
-	return doc, nil
+	mapping := root.Content[0]
+
+	sections := map[string]any{
+		"models":    ov.Models,
+		"settings":  ov.Settings,
+		"disabled":  ov.Disabled,
+		"protocols": ov.Protocols,
+	}
+	for _, name := range sectionNames {
+		val := sections[name]
+		empty := isEmptySection(name, ov)
+		idx := mappingIndex(mapping, name)
+		if empty {
+			// 空段直接删键：留下 `disabled: []` 只是噪音，语义与缺失相同。
+			if idx >= 0 {
+				mapping.Content = append(mapping.Content[:idx-1], mapping.Content[idx+1:]...)
+			}
+			continue
+		}
+		node, err := valueNode(val)
+		if err != nil {
+			return fmt.Errorf("序列化 %s 失败: %w", name, err)
+		}
+		if idx >= 0 {
+			// 保留原值节点上的注释（形如 `models:  # 覆盖层`），只换内容。
+			old := mapping.Content[idx]
+			node.HeadComment, node.LineComment, node.FootComment = old.HeadComment, old.LineComment, old.FootComment
+			mapping.Content[idx] = node
+			continue
+		}
+		mapping.Content = append(mapping.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, node)
+	}
+
+	return encodeAtomic(path, &root)
 }
 
-// SaveFileDoc 先写临时文件再 rename，避免读到半截内容。
-func SaveFileDoc(path string, doc fileDoc) error {
-	data, err := yaml.Marshal(doc)
+func isEmptySection(name string, ov catalog.Overlays) bool {
+	switch name {
+	case "models":
+		return len(ov.Models) == 0
+	case "settings":
+		return len(ov.Settings.Defaults) == 0
+	case "disabled":
+		return len(ov.Disabled) == 0
+	case "protocols":
+		return len(ov.Protocols) == 0
+	}
+	return true
+}
+
+// mappingIndex 返回键对应「值节点」的下标；mapping 是 key/value 交替排列的。
+func mappingIndex(m *yaml.Node, key string) int {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+func valueNode(v any) (*yaml.Node, error) {
+	b, err := yaml.Marshal(v)
 	if err != nil {
+		return nil, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	if len(doc.Content) == 0 {
+		return nil, errors.New("空文档")
+	}
+	return doc.Content[0], nil
+}
+
+// encodeAtomic 先写临时文件再 rename，避免读到半截内容。
+func encodeAtomic(path string, doc *yaml.Node) error {
+	var buf strings.Builder
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
 		return err
 	}
-	tmp := path + ".tmp." + strconv.FormatInt(time.Now().UnixNano(), 10)
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := enc.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+
+	tmp := path + ".tmp." + fmt.Sprint(time.Now().UnixNano())
+	if err := os.WriteFile(tmp, []byte(buf.String()), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

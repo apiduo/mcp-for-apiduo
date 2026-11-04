@@ -1,0 +1,43 @@
+# mcp-for-apiduo · ai-prod 部署声明
+#
+# 镜像由本仓 .github/workflows/release.yml 构建推送（前端页面与契约已打进镜像）：
+#   ghcr.io/apiduo/mcp-for-apiduo:<tag>   ← git tag 带 v，镜像 tag 不带
+#
+# 两条红线：
+#   1. 端口只绑回环。公网入口一律 nginx + mcp.apiduo.cn，绝不 0.0.0.0。
+#   2. 镜像钉版本，不用 latest：回滚就是把 MCP_IMAGE_TAG 指回上一个版本。
+name: mcp-for-apiduo
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"      # 本机磁盘有限，不设上限迟早吃满
+    max-file: "3"
+
+services:
+  mcp:
+    image: ghcr.io/apiduo/mcp-for-apiduo:${MCP_IMAGE_TAG:-0.0.3}
+    container_name: mcp-for-apiduo
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      # MCP：公网经 nginx 反代到这里
+      - "127.0.0.1:39090:8080"
+      # 管理端：**不经过 nginx**，只用 SSH 隧道访问
+      - "127.0.0.1:39091:8081"
+    volumes:
+      # 覆盖层、审计日志都写在这里；容器以 uid 65532 运行，宿主目录需 chown 65532
+      - /www/data/mcp-for-apiduo:/app/conf
+    # 默认走环境变量；这里显式给配置文件，才能有「热更新 + 覆盖层持久化 + 审计」
+    command: ["-config", "/app/conf/config.yaml"]
+    environment:
+      TZ: Asia/Shanghai
+    # 与 apiduo（new-api）同网络，用容器名直连，避免 127.0.0.1:39045 跨容器不可达
+    networks:
+      - apiduo_default
+    # ⚠️ 不写 healthcheck：distroless 里没有 shell / curl / wget，
+    #    任何 test 都会是假绿。外部探活走 nginx 的 /healthz。
+
+networks:
+  apiduo_default:
+    external: true

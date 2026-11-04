@@ -36,6 +36,7 @@ func main() {
 		adminAddr  = flag.String("admin-addr", envOr("MCP_ADMIN_ADDR", ":8081"), "管理端监听地址")
 		uiPath     = flag.String("ui", "prototype/admin.html", "管理端页面文件路径；为空则不托管")
 		schemaPath = flag.String("schema", "packages/model-capabilities.schema.json", "模型能力契约文件路径；为空则不提供 /admin/schema")
+		cacheTTL   = flag.Duration("models-cache-ttl", 30*time.Second, "管理端读路径缓存上游模型列表的时长；0 表示关闭")
 	)
 	flag.Parse()
 
@@ -46,7 +47,8 @@ func main() {
 		log.Error("配置加载失败", "err", err)
 		os.Exit(1)
 	}
-	store.Start()
+	// 注意：Start 放到所有回调注册之后。轮询一旦跑起来就会触发回调，
+	// 那时 listeners 还在被追加，既会漏发也可能产生数据竞争。
 	defer store.Close()
 
 	cfg := store.Get().Redacted()
@@ -54,22 +56,19 @@ func main() {
 
 	up := upstream.New(store)
 
-	adm, err := admin.New(*cfgPath, store)
-	if err != nil {
-		log.Error("管理端初始化失败", "err", err)
-		os.Exit(1)
-	}
+	adm := admin.New(store)
 	adm.Version = version
 	adm.UIPath = *uiPath
 	adm.SchemaPath = *schemaPath
+	adm.SetModelCacheTTL(*cacheTTL)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-for-apiduo", Version: version}, nil)
 	deps := &tools.Deps{Up: up, Overlays: adm.Overlays, CacheTTL: 60 * time.Second}
 	tools.Register(server, deps)
 
-	// 管理端保存后：失效模型缓存，并校验「合并结果」而不是覆盖层本身。
-	adm.OnChange = deps.InvalidateCache
-	// 配置重载（base_url 变了）同样要失效：缓存里是旧上游的模型列表。
+	// 热更新与管理端保存走同一条通知：缓存里是旧上游的模型列表时，
+	// base_url 与覆盖层任一变化都必须失效它。两者共用一个 Store 之后，
+	// 这里只剩一个注册点 —— 不会再出现「面板保存了但缓存没失效」。
 	store.OnReload(deps.InvalidateCache)
 	adm.Validate = func(ov catalog.Overlays) admin.Validation {
 		return validateOverlays(context.Background(), up, store, ov)
@@ -91,6 +90,8 @@ func main() {
 		// Stateless：不读不写 Mcp-Session-Id，任何副本都能处理任何请求。
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
 	)
+
+	store.Start()
 
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle("/mcp", injectKey(httpHandler, store))
@@ -161,20 +162,29 @@ func injectKey(next http.Handler, store *config.Store) http.Handler {
 //
 // 覆盖层本身不是合法模型对象（缺 id/object），拿完整 schema 校验它必然报错；
 // 所以要对着上游模型逐条合并后再校验。
+//
+// 每条问题都带 Path：管理端把它直接回给调用方（包括 agent），
+// 「哪一条配置错了」必须是机器可寻址的，否则只能靠人猜。
 func validateOverlays(ctx context.Context, up *upstream.Client, store *config.Store, ov catalog.Overlays) admin.Validation {
 	var out admin.Validation
+	issue := func(path, msg, hint string) {
+		out.Issues = append(out.Issues, catalog.Problem{Path: path, Message: msg, Hint: hint})
+	}
+	warn := func(path, msg, hint string) {
+		out.Warnings = append(out.Warnings, catalog.Problem{Path: path, Message: msg, Hint: hint})
+	}
 
 	// 结构层面先看默认值是否合理（不依赖上游）。
-	for kind, id := range ov.Settings.Defaults {
-		if id == "" {
-			continue
-		}
+	for kind := range ov.Settings.Defaults {
 		switch kind {
 		case "image", "video", "search":
 		default:
-			out.Issues = append(out.Issues, "settings.defaults 含未知类型: "+kind)
+			issue("/settings/defaults/"+catalog.EscapePointer(kind),
+				"settings.defaults 含未知类型: "+kind,
+				"默认模型只能按 image / video / search 设置")
 		}
 	}
+
 	// 协议模板自身先做结构校验（不依赖上游）：enum 为空、min>max、垫图负数等
 	// 要在这里拦住，否则会一次性污染所有继承它的模型。
 	for name, tpl := range ov.Protocols {
@@ -182,10 +192,12 @@ func validateOverlays(ctx context.Context, up *upstream.Client, store *config.St
 		for k, v := range tpl {
 			probe[k] = v
 		}
-		for _, e := range catalog.Validate(probe) {
-			out.Issues = append(out.Issues, "protocols."+name+": "+e)
+		for _, p := range catalog.ValidateProblems(probe) {
+			p.Path = "/protocols/" + catalog.EscapePointer(name) + p.Path
+			out.Issues = append(out.Issues, p)
 		}
 	}
+
 	// 只有「什么都没配」时才可跳过上游校验。早先只看 len(ov.Models)，
 	// 导致「只改默认模型」「只改下架列表」「只改协议模板」时校验被静默跳过。
 	hasDefault := false
@@ -211,7 +223,8 @@ func validateOverlays(ctx context.Context, up *upstream.Client, store *config.St
 	raw, err := up.ListModels(ctx, key)
 	if err != nil {
 		// 事实不可得时保守阻断：连合并结果都验不了，不该落盘。
-		out.Issues = append(out.Issues, "拉取上游模型失败，无法校验："+err.Error())
+		issue("", "拉取上游模型失败，无法校验："+err.Error(),
+			"管理端不拿缓存冒充事实；等上游可用后重试")
 		return out
 	}
 	// 必须先归一化，否则与管理端的判定不一致：
@@ -223,26 +236,31 @@ func validateOverlays(ctx context.Context, up *upstream.Client, store *config.St
 	disabled := ov.DisabledSet()
 
 	for id, patch := range ov.Models {
+		base := "/models/" + catalog.EscapePointer(id)
 		if name, _ := patch["_protocol"].(string); strings.TrimSpace(name) != "" {
 			if !ov.HasProtocol(strings.TrimSpace(name)) {
-				out.Warnings = append(out.Warnings, "模型 "+id+" 引用的协议族 "+name+" 不存在（运行时退化为无模板）")
+				warn(base+"/_protocol", "模型 "+id+" 引用的协议族 "+name+" 不存在（运行时退化为无模板）",
+					"改成已存在的协议族名，或先用 protocol.patch 建一份模板")
 			}
 		}
 		m, ok := catalog.Find(raw, id)
 		if !ok {
 			// 运行时 Apply 会静默忽略它，不会造成错误调用；只提示，不阻断保存。
-			out.Warnings = append(out.Warnings, "覆盖层包含上游不存在的模型（已忽略）: "+id)
+			warn(base, "覆盖层包含上游不存在的模型（已忽略）: "+id,
+				"上游列表才是事实来源；确认 ID 拼写，或等上游上线后再配")
 			continue
 		}
 		// 与运行时共用同一条合并链：模板补缺 → 模型级覆盖，避免两处判定不一致。
 		merged := ov.ApplyOne(m)
-		for _, e := range catalog.Validate(merged) {
-			out.Issues = append(out.Issues, id+": "+e)
+		for _, p := range catalog.ValidateProblems(merged) {
+			p.Path = base + p.Path
+			out.Issues = append(out.Issues, p)
 		}
 	}
 	for id := range disabled {
 		if _, ok := catalog.Find(raw, id); !ok {
-			out.Warnings = append(out.Warnings, "下架列表含上游不存在的模型（已忽略）: "+id)
+			warn("/disabled/"+catalog.EscapePointer(id), "下架列表含上游不存在的模型（已忽略）: "+id,
+				"上游下架的模型会自动消失，不需要下架；从列表里删掉即可")
 		}
 	}
 
@@ -250,21 +268,25 @@ func validateOverlays(ctx context.Context, up *upstream.Client, store *config.St
 		if id == "" {
 			continue
 		}
+		path := "/settings/defaults/" + catalog.EscapePointer(kind)
 		m, ok := catalog.Find(raw, id)
 		if !ok {
 			// PickDefault 会安全回落到第一个，不阻断。
-			out.Warnings = append(out.Warnings, "默认 "+kind+" 模型当前不在上游: "+id+"（运行时回落）")
+			warn(path, "默认 "+kind+" 模型当前不在上游: "+id+"（运行时回落）",
+				"换一个上游存在的同类型模型，避免默认值随上游列表顺序漂移")
 			continue
 		}
 		if disabled[id] {
-			out.Issues = append(out.Issues, "默认 "+kind+" 模型 "+id+" 已被下架，请改默认值或恢复该模型")
+			issue(path, "默认 "+kind+" 模型 "+id+" 已被下架，请改默认值或恢复该模型",
+				"先用 disabled.remove 恢复它，或改设另一个默认模型")
 			continue
 		}
 		if k := m.Kind(); k != kind {
 			if k == catalog.KindUnknown {
 				k = "未知（上游未声明能力字段）"
 			}
-			out.Issues = append(out.Issues, "默认 "+kind+" 模型 "+id+" 的实际类型是 "+k)
+			issue(path, "默认 "+kind+" 模型 "+id+" 的实际类型是 "+k,
+				"默认模型必须与 kind 相符；不确定就先 GET /admin/models?include_unknown=1")
 		}
 	}
 	return out

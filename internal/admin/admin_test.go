@@ -18,6 +18,7 @@ import (
 
 const testServiceKey = "sk-service-test-key"
 
+// newTestHandler 构造纯内存模式的管理端：不落盘、不轮询。
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
 	t.Setenv("API_KEY", testServiceKey)
@@ -25,17 +26,45 @@ func newTestHandler(t *testing.T) *Handler {
 	if err != nil {
 		t.Fatalf("构造 config.Store 失败: %v", err)
 	}
-	h, err := New("", store)
-	if err != nil {
-		t.Fatalf("构造 Handler 失败: %v", err)
+	return New(store)
+}
+
+// newFileHandler 构造落盘模式的管理端，返回 handler 与自增配置路径。
+func newFileHandler(t *testing.T, seed string) (*Handler, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if seed == "" {
+		seed = "base_url: http://127.0.0.1:3000/v1\napi_key: " + testServiceKey + "\n"
 	}
-	return h
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("API_KEY", testServiceKey)
+	store, err := config.NewStore(path, 0)
+	if err != nil {
+		t.Fatalf("构造 config.Store 失败: %v", err)
+	}
+	return New(store), path
 }
 
 func testMux(h *Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux
+}
+
+func do(mux http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	var r *http.Request
+	if body == "" {
+		r = httptest.NewRequest(method, path, nil)
+	} else {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+	}
+	r.Header.Set("Authorization", "Bearer "+testServiceKey)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	return w
 }
 
 func driftRequest(mux http.Handler, withAuth bool) *httptest.ResponseRecorder {
@@ -60,14 +89,16 @@ type driftResponse struct {
 // 漂移端点必须走服务身份鉴权，且输出与运行时归一化结果一致。
 func TestDriftEndpoint(t *testing.T) {
 	h := newTestHandler(t)
-	h.cur.Store(&catalog.Overlays{
+	if _, err := h.store.ReplaceOverlays(catalog.Overlays{
 		Models: map[string]map[string]any{
 			"img-a":           {"kind": "image"},
 			"gone-old-260915": {"kind": "image"}, // 上游换版后遗留的孤儿条目
 		},
 		Settings: catalog.Settings{Defaults: map[string]string{}},
 		Disabled: []string{"vid-b", "gone-disabled"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	h.Models = func(_ context.Context, key string) ([]catalog.Model, error) {
 		if key != testServiceKey {
 			t.Errorf("传给上游的 key 不对: %q", key)
@@ -141,24 +172,22 @@ func TestDriftEndpointNotWired(t *testing.T) {
 }
 
 func putOverlays(mux http.Handler, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPut, "/admin/overlays", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+testServiceKey)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	return w
+	return do(mux, http.MethodPut, "/admin/overlays", body)
 }
 
 type saveResponse struct {
-	Saved    bool     `json:"saved"`
-	Warnings []string `json:"warnings"`
-	Issues   []string `json:"issues"`
+	Saved    bool              `json:"saved"`
+	Revision string            `json:"revision"`
+	Warnings []catalog.Problem `json:"warnings"`
+	Issues   []catalog.Problem `json:"issues"`
 }
 
 // 漂移告警不阻断保存：前期人工配置频度高，一个孤儿条目不该锁死整个面板。
 func TestPutOverlaysWarningsDoNotBlock(t *testing.T) {
 	h := newTestHandler(t)
 	h.Validate = func(_ catalog.Overlays) Validation {
-		return Validation{Warnings: []string{"覆盖层包含上游不存在的模型: gone-260915"}}
+		return Validation{Warnings: []catalog.Problem{{Path: "/models/gone-260915",
+			Message: "覆盖层包含上游不存在的模型: gone-260915"}}}
 	}
 	w := putOverlays(testMux(h), `{"models":{"img-a":{"kind":"image"}}}`)
 	if w.Code != http.StatusOK {
@@ -171,6 +200,9 @@ func TestPutOverlaysWarningsDoNotBlock(t *testing.T) {
 	if !got.Saved || len(got.Warnings) != 1 {
 		t.Errorf("响应 = %+v", got)
 	}
+	if got.Warnings[0].Path != "/models/gone-260915" {
+		t.Errorf("告警丢了路径: %+v", got.Warnings[0])
+	}
 	if _, ok := h.Overlays().Models["img-a"]; !ok {
 		t.Error("有告警却没落盘")
 	}
@@ -180,7 +212,8 @@ func TestPutOverlaysWarningsDoNotBlock(t *testing.T) {
 func TestPutOverlaysIssuesBlock(t *testing.T) {
 	h := newTestHandler(t)
 	h.Validate = func(_ catalog.Overlays) Validation {
-		return Validation{Issues: []string{"img-a: kind 取值非法"}}
+		return Validation{Issues: []catalog.Problem{{Path: "/models/img-a/kind",
+			Message: "kind 取值非法"}}}
 	}
 	w := putOverlays(testMux(h), `{"models":{"img-a":{"kind":"audio"}}}`)
 	if w.Code != http.StatusUnprocessableEntity {
@@ -200,21 +233,7 @@ func TestPutOverlaysIssuesBlock(t *testing.T) {
 
 // 下架列表必须真正写进配置文件并能读回，否则重启即丢失。
 func TestPutOverlaysPersistsDisabled(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	seed := "base_url: http://127.0.0.1:3000/v1\napi_key: " + testServiceKey + "\n"
-	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("API_KEY", testServiceKey)
-	store, err := config.NewStore("", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := New(path, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h, path := newFileHandler(t, "")
 	body := `{"models":{},"disabled":["doubao-old-260915"],"settings":{"defaults":{}}}`
 	if w := putOverlays(testMux(h), body); w.Code != http.StatusOK {
 		t.Fatalf("期望 200，实际 %d: %s", w.Code, w.Body.String())
@@ -229,23 +248,28 @@ func TestPutOverlaysPersistsDisabled(t *testing.T) {
 	if !strings.Contains(string(data), "base_url") {
 		t.Error("保存时把部署配置冲掉了")
 	}
-	h2, err := New(path, store)
+
+	// 重启 = 用同一个文件重新构造一份 Store，覆盖层必须能读回。
+	t.Setenv("API_KEY", testServiceKey)
+	store2, err := config.NewStore(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(h2.Overlays().Disabled, []string{"doubao-old-260915"}) {
-		t.Errorf("重启后 disabled = %v", h2.Overlays().Disabled)
+	if !slices.Equal(store2.Overlays().Disabled, []string{"doubao-old-260915"}) {
+		t.Errorf("重启后 disabled = %v", store2.Overlays().Disabled)
 	}
 }
 
 // 旧管理端不知道 disabled 字段，PUT 里不带这个键时不能把下架列表清掉。
 func TestPutOverlaysLegacyClientKeepsDisabled(t *testing.T) {
 	h := newTestHandler(t)
-	h.cur.Store(&catalog.Overlays{
+	if _, err := h.store.ReplaceOverlays(catalog.Overlays{
 		Models:   map[string]map[string]any{},
 		Settings: catalog.Settings{Defaults: map[string]string{}},
 		Disabled: []string{"old-model-260915"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	mux := testMux(h)
 
 	if w := putOverlays(mux, `{"models":{"img-a":{"kind":"image"}}}`); w.Code != http.StatusOK {
@@ -266,21 +290,7 @@ func TestPutOverlaysLegacyClientKeepsDisabled(t *testing.T) {
 
 // 协议模板必须写进配置文件并能读回，且不被旧客户端的保存清空。
 func TestPutOverlaysProtocols(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	seed := "base_url: http://127.0.0.1:3000/v1\napi_key: " + testServiceKey + "\n"
-	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("API_KEY", testServiceKey)
-	store, err := config.NewStore("", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := New(path, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h, path := newFileHandler(t, "")
 	body := `{"models":{},"protocols":{"video":{"execution":{"task":"async","transport":"video_generations"}}}}`
 	if w := putOverlays(testMux(h), body); w.Code != http.StatusOK {
 		t.Fatalf("期望 200，实际 %d: %s", w.Code, w.Body.String())
@@ -292,26 +302,28 @@ func TestPutOverlaysProtocols(t *testing.T) {
 	if !strings.Contains(string(data), "video_generations") {
 		t.Errorf("protocols 未写入文件:\n%s", data)
 	}
-	h2, err := New(path, store)
+
+	t.Setenv("API_KEY", testServiceKey)
+	store2, err := config.NewStore(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, ok := h2.Overlays().Protocols["video"]["execution"].(map[string]any)
+	ex, ok := store2.Overlays().Protocols["video"]["execution"].(map[string]any)
 	if !ok || ex["transport"] != "video_generations" {
-		t.Errorf("重启后 protocols = %v", h2.Overlays().Protocols)
+		t.Errorf("重启后 protocols = %v", store2.Overlays().Protocols)
 	}
 
 	// 旧客户端 PUT 不带 protocols 键时保留；显式 {} 才清空。
-	if w := putOverlays(testMux(h2), `{"models":{}}`); w.Code != http.StatusOK {
+	if w := putOverlays(testMux(h), `{"models":{}}`); w.Code != http.StatusOK {
 		t.Fatalf("期望 200，实际 %d", w.Code)
 	}
-	if _, ok := h2.Overlays().Protocols["video"]; !ok {
+	if _, ok := h.Overlays().Protocols["video"]; !ok {
 		t.Error("旧客户端保存把协议模板清空了")
 	}
-	if w := putOverlays(testMux(h2), `{"models":{},"protocols":{}}`); w.Code != http.StatusOK {
+	if w := putOverlays(testMux(h), `{"models":{},"protocols":{}}`); w.Code != http.StatusOK {
 		t.Fatalf("期望 200，实际 %d", w.Code)
 	}
-	if len(h2.Overlays().Protocols) != 0 {
+	if len(h.Overlays().Protocols) != 0 {
 		t.Error("显式清空未生效")
 	}
 }

@@ -318,22 +318,62 @@ func deepMerge(dst, src map[string]any) {
 	}
 }
 
-// Validate 校验「合并结果」。能力层面的矛盾已由结构消灭（没有 modes），
-// 这里只覆盖输入与参数层面。
+// Problem 是一条校验结果，Path 是可寻址的字段位置（JSON Pointer，相对模型对象）。
+//
+// 为什么要 Path 而不是只有一句话：这份结果要给人看，也要给 agent 用。
+// agent 拿到「min 不能大于 max」还得自己猜是哪个参数、哪个模型；
+// 拿到 /models/x/parameters/n 才能改对地方。同一份数据，两种消费者。
+//
+// Message 保持自解释（含字段名），所以只读日志的人不需要拼 Path。
+type Problem struct {
+	Path    string `json:"path,omitempty" yaml:"path,omitempty"`
+	Message string `json:"message" yaml:"message"`
+	Hint    string `json:"hint,omitempty" yaml:"hint,omitempty"`
+}
+
+// String 拼回人类可读的一行，供日志与旧调用方使用。
+func (p Problem) String() string {
+	if p.Path == "" {
+		return p.Message
+	}
+	return strings.TrimPrefix(p.Path, "/") + "：" + p.Message
+}
+
+// Validate 校验「合并结果」，返回纯文本。保留这个签名是为了不把日志与
+// 既有调用方绑在结构上；需要定位字段的调用方用 ValidateProblems。
 func Validate(m Model) []string {
-	var errs []string
+	ps := ValidateProblems(m)
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Message)
+	}
+	return out
+}
+
+// ValidateProblems 校验「合并结果」。能力层面的矛盾已由结构消灭（没有 modes），
+// 这里只覆盖输入与参数层面。
+//
+// 校验对象必须是合并结果，不是覆盖层：覆盖层缺 id/object，单独校验必然报错。
+func ValidateProblems(m Model) []Problem {
+	var ps []Problem
+	add := func(path, msg, hint string) {
+		ps = append(ps, Problem{Path: path, Message: msg, Hint: hint})
+	}
+
 	if m.ID() == "" {
-		errs = append(errs, "id 不能为空")
+		add("", "id 不能为空", "覆盖层的键必须是上游 /v1/models 里的模型 ID")
 	}
 	switch m.Kind() {
 	case KindUnknown, "image", "video", "search":
 	default:
-		errs = append(errs, fmt.Sprintf("kind 取值非法: %q", m.Kind()))
+		add("/kind", fmt.Sprintf("kind 取值非法: %q", m.Kind()),
+			"只能是 image / video / search；不确定就先看上游是否声明了 supported_endpoint_types 或 domains")
 	}
 	switch m.Task() {
 	case "sync", "async":
 	default:
-		errs = append(errs, fmt.Sprintf("execution.task 取值非法: %q", m.Task()))
+		add("/execution/task", fmt.Sprintf("execution.task 取值非法: %q", m.Task()),
+			"只能是 sync 或 async")
 	}
 
 	inp := m.sub("input")
@@ -341,7 +381,8 @@ func Validate(m Model) []string {
 		if v, ok := inp[k]; ok {
 			n := intOf(v)
 			if float64(n) != toF(v) || n < 0 {
-				errs = append(errs, fmt.Sprintf("input.%s 必须是非负整数", k))
+				add("/input/"+k, fmt.Sprintf("input.%s 必须是非负整数", k),
+					"0 表示明确不支持；键缺失表示「未知、不拦截」；不要用 0 表达「还没填」")
 			}
 		}
 	}
@@ -351,18 +392,21 @@ func Validate(m Model) []string {
 		enum, hasEnum := spec["enum"].([]any)
 		if hasEnum {
 			if len(enum) == 0 {
-				errs = append(errs, fmt.Sprintf("parameters.%s：enum 不能为空", name))
+				add("/parameters/"+name, fmt.Sprintf("parameters.%s：enum 不能为空", name),
+					"要么给出至少一个可选值，要么删掉 enum 表示任意值")
 			} else if def, ok := spec["default"]; ok && !contains(enum, def) {
-				errs = append(errs, fmt.Sprintf("parameters.%s：默认值 %v 不在可选值里", name, def))
+				add("/parameters/"+name, fmt.Sprintf("parameters.%s：默认值 %v 不在可选值里", name, def),
+					fmt.Sprintf("把 default 改成 enum 里的一个值：%v", enum))
 			}
 		}
 		mn, hasMin := spec["min"]
 		mx, hasMax := spec["max"]
 		if hasMin && hasMax && toF(mn) > toF(mx) {
-			errs = append(errs, fmt.Sprintf("parameters.%s：min 不能大于 max", name))
+			add("/parameters/"+name, fmt.Sprintf("parameters.%s：min 不能大于 max", name),
+				"min/max 只要求出现一边；两边都写时必须 min ≤ max")
 		}
 	}
-	return errs
+	return ps
 }
 
 func toF(v any) float64 {
@@ -419,6 +463,80 @@ func (o Overlays) DisabledSet() map[string]bool {
 		if id = strings.TrimSpace(id); id != "" {
 			out[id] = true
 		}
+	}
+	return out
+}
+
+// Clone 深拷贝覆盖层，用于「已发布快照」与「工作副本」之间隔离。
+//
+// 没有它，管理端拿到的 Overlays() 和 store 内部持有的是同一批 map：
+// 任何一次「就地改一个小字段」都会绕过校验和落盘，直接改到运行时。
+func (o Overlays) Clone() Overlays {
+	out := Overlays{
+		Models:    make(map[string]map[string]any, len(o.Models)),
+		Settings:  Settings{Defaults: make(map[string]string, len(o.Settings.Defaults))},
+		Disabled:  append([]string(nil), o.Disabled...),
+		Protocols: make(map[string]map[string]any, len(o.Protocols)),
+	}
+	for id, patch := range o.Models {
+		if patch == nil {
+			patch = map[string]any{}
+		}
+		out.Models[id] = cloneValue(patch).(map[string]any)
+	}
+	for k, v := range o.Settings.Defaults {
+		out.Settings.Defaults[k] = v
+	}
+	for name, tpl := range o.Protocols {
+		if tpl == nil {
+			tpl = map[string]any{}
+		}
+		out.Protocols[name] = cloneValue(tpl).(map[string]any)
+	}
+	return out
+}
+
+// Canonical 返回规范形式：集合非 nil、空条目剔除、disabled 去重并排序。
+//
+// 规范形式同时是「落盘内容」和「版本号输入」。不排序的话，同一份下架列表
+// 换个顺序就会得到不同的 ETag，客户端会误以为配置被别人改了。
+func (o Overlays) Canonical() Overlays {
+	out := Overlays{
+		Models:    make(map[string]map[string]any, len(o.Models)),
+		Settings:  Settings{Defaults: make(map[string]string, len(o.Settings.Defaults))},
+		Disabled:  []string{},
+		Protocols: make(map[string]map[string]any, len(o.Protocols)),
+	}
+	for id, patch := range o.Models {
+		id = strings.TrimSpace(id)
+		if id == "" || len(patch) == 0 {
+			continue // 空补丁没有任何语义，留着只会让版本号抖动
+		}
+		out.Models[id] = cloneValue(patch).(map[string]any)
+	}
+	for kind, id := range o.Settings.Defaults {
+		kind = strings.TrimSpace(kind)
+		if kind == "" || strings.TrimSpace(id) == "" {
+			continue
+		}
+		out.Settings.Defaults[kind] = strings.TrimSpace(id)
+	}
+	seen := map[string]bool{}
+	for _, id := range o.Disabled {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out.Disabled = append(out.Disabled, id)
+	}
+	sort.Strings(out.Disabled)
+	for name, tpl := range o.Protocols {
+		name = strings.TrimSpace(name)
+		if name == "" || len(tpl) == 0 {
+			continue
+		}
+		out.Protocols[name] = cloneValue(tpl).(map[string]any)
 	}
 	return out
 }
@@ -619,6 +737,14 @@ func Find(models []Model, id string) (Model, bool) {
 		}
 	}
 	return nil, false
+}
+
+// EscapePointer 按 RFC 6901 转义 JSON Pointer 的一段。
+//
+// 管理端与校验共用它：模型 ID 里可能出现 ~ 或 /（如 openai/gpt-4），
+// 路径要能被客户端原样拼回去。
+func EscapePointer(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }
 
 // Summary 生成人类可读的一行摘要，供日志与调试输出。

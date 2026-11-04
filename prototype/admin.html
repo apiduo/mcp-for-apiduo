@@ -1281,7 +1281,7 @@ async function api(path, opts){
   try { data = text ? JSON.parse(text) : null } catch { data = text }
   if (!res.ok){
     const msg = data && data.error
-      ? (typeof data.error === "string" ? data.error : JSON.stringify(data.error))
+      ? (typeof data.error === "string" ? data.error : (data.error.message || JSON.stringify(data.error)))
       : (data && data.issues ? "校验未通过" : "HTTP " + res.status);
     const err = new ApiError(msg, res.status, data);
     err.issues = data && data.issues;
@@ -1299,6 +1299,8 @@ function stateToDoc(d){
   API.merged = d.merged || [];
   API.drift = d.drift || null;
   API.upstreamError = (d.upstream && d.upstream.error) || "";
+  /* 版本号：写请求带 If-Match，避免面板与 agent 并发改配置时互相覆盖。 */
+  API.revision = (d.server && d.server.revision) || "";
   const map = {};
   for (const m of API.upstream){
     if (!m || !m.id) continue;
@@ -1361,12 +1363,16 @@ async function persist(doc){
     await delay(380);
     return { saved: true, warnings: [], demo: true };
   }
+  const headers = { "Content-Type": "application/json" };
+  if (API.revision) headers["If-Match"] = `"${API.revision}"`;
   const r = await api("/admin/overlays", {
     method: "PUT",
     body: JSON.stringify(doc),
-    headers: { "Content-Type": "application/json" }
+    headers
   });
-  return r.data || { saved: true };
+  const data = r.data || { saved: true };
+  if (data.revision) API.revision = data.revision;
+  return data;
 }
 
 /* ── 上游数据：模拟 apiduo GET /v1/models（契约 v3，四层分离） ─────── */
@@ -2880,14 +2886,22 @@ async function save(){
     renderDefaultPicker();
     renderProtocols();
     refreshAll();
-    const warn = res && res.warnings && res.warnings.length ? ` · ${res.warnings.length} 条提醒：${res.warnings[0]}` : "";
+    if (res && res.revision) API.revision = res.revision;
+    const warnItem = res && res.warnings && res.warnings.length ? res.warnings[0] : null;
+    const warn = warnItem ? ` · ${res.warnings.length} 条提醒：${warnItem.message || warnItem}` : "";
     toast(API.demo
       ? `演示模式：仅本地预览，未写入服务 · ${leaves(draft()).length} 项覆盖`
       : `已写入真实服务 · ${leaves(draft()).length} 项覆盖` + warn);
     dbgRefreshConn();
   } catch (err){
-    state.remoteIssues = (err.issues || []).map(String);
+    state.remoteIssues = (err.issues || []).map(it => (it && it.message) || String(it));
     refreshIssues();
+    if (err && err.status === 409){
+      /* 别人（可能是一个 agent）在我们打开页面之后改过配置。
+         盲目重发会把它的改动抹掉，所以这里只要求刷新，不自动重试。 */
+      toast("配置已被其他客户端修改，本次未写入。请刷新页面后重新编辑。", true);
+      return;
+    }
     toast("保存失败：" + (err && err.message ? err.message : "未知错误") +
       (state.remoteIssues.length ? "（详见右侧问题列表）" : ""), true);
   } finally {

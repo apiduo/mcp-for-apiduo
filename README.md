@@ -77,11 +77,18 @@ api_key: sk-xxxx
 
 ### 热更新
 
-配置文件按 `mtime` 轮询，变更即生效：
+一份文件只有一个读者 —— `config.Store`。部署配置与覆盖层在**同一个快照**里切换，
+按 `mtime` 轮询，改文件即生效：
 
-1. **原子切换**：当前配置用 `atomic.Pointer` 持有，读路径无锁，在途请求不受影响。
-2. **失败保留旧值**：文件写坏或字段非法时保留上一份可用配置，错误进日志。
+1. **原子切换**：整个文档（`base_url` / `api_key` / 覆盖层 / 版本号）用 `atomic.Pointer`
+   持有，读路径无锁，在途请求不受影响，也不会看到「新 base_url 配旧覆盖层」。
+2. **失败保留旧值**：文件写坏或字段非法时保留上一份可用配置，错误进日志与 `/admin/healthz`。
 3. **每次变更都校验**：`base_url` 限 `http`/`https`、非空、可解析、去尾部 `/`。
+
+早先是两个读者：`config.Store` 轮询部署项，`admin.Handler` 在启动时读一次覆盖层快照。
+结果手改 `models` 永远不生效，只能重启 —— 不是缓存问题，是两条读路径必然分叉。
+现在 Write 也走同一个 Store，所以「面板保存」和「手改文件」是同一条路径，
+区别只是谁触发写入。
 
 第 3 条不是洁癖。`base_url` 决定本服务**带着 key** 往哪发请求 —— 能被改成任意地址的话，
 它就是一个持有凭证的 SSRF 跳板，而日志里只会留下一行「配置变更」。
@@ -90,6 +97,25 @@ api_key: sk-xxxx
 「改文件不生效」或「漏写字段把有效地址清成空串」这类最难查的故障。
 
 多副本挂同一份配置文件（ConfigMap / 共享 PVC），热更新天然一致。不要给单个副本挂独立配置。
+
+### 写回不重排、不删注释
+
+管理端保存时不是「读成 map 再整体 Marshal」——那会把 `base_url` 下面的注释、
+键的排列顺序全部抹掉。这份文件是人维护的、要进 git diff 的，一次面板保存就把它
+洗成机器格式是不可接受的副作用。
+
+做法是直接改 YAML 语法树：只替换 `models` / `settings` / `disabled` / `protocols`
+四个键的值节点，其余节点原样保留，键上的注释也跟着保留；空段直接删键，
+不留 `disabled: []` 这种噪音。`TestReplaceOverlaysPreservesHumanFile` 守住这条。
+
+### 版本号：内容哈希
+
+覆盖层每次发布都算一个 `revision`（规范化 JSON 的 SHA-256 前 16 位），
+出现在响应体、`ETag` 与 `/admin/manifest` 里。
+
+用内容哈希而不是自增计数：多副本挂同一份文件时各副本独立算出同一个版本，
+不需要协调；重启也不会让版本号跳跃。规范化（`disabled` 排序去重、空补丁剔除）
+是前提 —— 否则同一集合换个顺序就得到新版本，客户端会以为配置被别人改了。
 
 ## 4. 为什么不需要扩展控制面
 
@@ -164,13 +190,14 @@ MCP Server 不保存任何用户状态：不存 key、不存会话、不存额�
 ```
 cmd/mcpd/            进程入口：MCP 端口 + 管理端口（两个监听分开）
 internal/
-  config/            两项配置 + mtime 热更新（原子切换、失败保留旧值）
+  config/            配置文件唯一的读者与写者：部署配置 + 覆盖层 + 版本号，
+                     mtime 热更新（原子切换、失败保留旧值），写回保留注释与键序
   catalog/           模型画像：访问器、kind 归一化、覆盖层合并、校验
   protocol/          协议族：生成/查询端点、编码（JSON/multipart）、字段映射
   upstream/          上游客户端：传输、错误映射、参考图下载（出站防护）
   tools/             5 个 MCP 工具
   taskid/            自包含 task_id 的 HMAC 签名（含协议族）
-  admin/             覆盖层读写 API
+  admin/             管理端：九个幂等操作（ops）、manifest、审计、管理端 MCP
 packages/
   model-capabilities.schema.json   模型能力扩展的机器可读定义（draft 2020-12，版本 4）
 prototype/
@@ -873,6 +900,198 @@ models:
 校验分级见 §10：`issues` 阻断并返回 422，`warnings` 照常保存并随 200 返回，前端应把两者分开呈现。
 存储单机用一份 YAML，多副本挂共享卷；变更频率是「人工改配置」级别，不需要一开始就上数据库。
 
+### 管理 API：先为 agent 写，再给人用
+
+管理端不只是页面的后端。它还要被 codex / workbuddy 这类客户端直接调用 ——
+它们没有上下文记忆、会盲目重试、会和别人并发改同一份配置。所以接口形状的判据
+不是「页面需要什么」，而是：**一个只能看见 JSON 的调用方，怎样才能改对配置。**
+
+四条性质，缺一条就不成立：
+
+| 性质 | 做法 | 缺失时的后果 |
+|---|---|---|
+| 可发现 | `GET /admin/manifest` 给出端点、九种操作、错误码与常用流程 | agent 猜路径、猜字段，靠 422 试错 |
+| 细粒度 | `POST /admin/ops` 是定址的小操作，不是整份文档替换 | 读-改-写一次就抹掉别人改的字段 |
+| 并发安全 | 响应带 `revision`，写请求可带 `If-Match`，不符 409 且不落盘 | last-writer-wins，两个客户端互相看不见 |
+| 可空跑 | `dry_run` 只校验并返回**叶子级** `changes` | 只有成/败两种结果，错了不知道错在哪 |
+
+#### 九个操作，四个集合
+
+覆盖层的全部状态就是四个集合。操作因此可以穷举，不需要「通用 JSON Patch」：
+
+| 集合 | 操作 |
+|---|---|
+| `models.<id>` 补丁 | `model.patch` / `model.delete` |
+| `settings.defaults.<kind>` | `default.set` / `default.delete` |
+| `disabled[]` | `disabled.add` / `disabled.remove` |
+| `protocols.<name>` | `protocol.patch` / `protocol.delete` |
+| 整份覆盖层 | `overlays.replace`（只用于导入/迁移） |
+
+`patch` / `template` 用 **RFC 7386 合并补丁**：对象递归合并，`null` 删键，数组整体替换。
+用标准语义而不是自创规则，是因为 agent 对它有稳定预期 —— 自创规则会让它每次回来查文档。
+
+九个操作全部**幂等**：同一组 ops 重发，状态与 `revision` 都不变（返回 `no_change: true`）。
+所以不需要 `Idempotency-Key` —— 用结构消灭重复提交，比用缓存去重便宜。
+
+一组 ops 要么全部生效，要么一条都不生效。批量改 53 个模型时这不是洁癖：
+循环单发会在第 30 个失败，留下一个「改了一半、没人知道改到哪」的配置。
+
+#### 端点
+
+| 端点 | 用途 |
+|---|---|
+| `GET /admin/manifest` | 自描述清单（端点从路由表生成，不会与实现漂移） |
+| `GET /admin/config` | 覆盖层 + `revision`，不拉上游，最便宜的起点 |
+| `POST /admin/ops` | 批量原子操作；`dry_run` 只校验 |
+| `GET /admin/models` | **投影列表**（不含参数约束）；`?kind=` 过滤、`?include_unknown=1` 含未声明类型、`?full=1` 仅导出用 |
+| `GET /admin/models/{id}` | **完整约束** + 三份视图（上游 / 覆盖层 / 合并）+ 漂移分类 |
+| `PATCH /admin/models/{id}` | 合并补丁，body 就是补丁本身 |
+| `DELETE /admin/models/{id}` | 删除整条覆盖层（≠ 下架） |
+| `PUT` / `DELETE /admin/settings/defaults/{kind}` | 设置 / 取消默认模型 |
+| `POST` / `DELETE /admin/disabled/{id}` | 下架 / 恢复 |
+| `PATCH` / `DELETE /admin/protocols/{name}` | 协议模板覆盖 / 回到内置 |
+| `GET /admin/history` | 变更记录 |
+| `POST /admin/mcp` | 管理端 MCP（下面单说） |
+| `GET /admin/overlays`、`PUT /admin/overlays` | 兼容旧面板：全量读写。agent 不要用 PUT |
+
+两条与管理端语义有关的细节：
+
+- **`/admin/models` 包含已下架模型**，并显式标注 `disabled: true`。客户端列表要过滤，
+  管理端不能过滤 —— 看不见就没法恢复。
+- **列表是投影、详情才是全量**，切分见下一节。
+
+#### 两段式读取：列表回答「是不是」，详情回答「是多少」
+
+`GET /admin/models` 返回的是**投影**，不是完整画像：
+
+| 列表给 | 列表不给 |
+|---|---|
+| `id` `kind` `source` `task` `transport` `disabled` `has_overlay` `max_reference_images` | `parameters.*` 的 `enum` / `min` / `max` / `default` |
+| `params`：参数**名**列表 | 参数的**约束** |
+
+切分线不是拍脑袋定的，它对应两个不同的问题：
+
+- 「这个模型能不能做我要做的事」—— 列表能答（类型、同步/异步、垫图上限、有哪些参数名）；
+- 「这个参数该填什么值」—— 只有详情能答（枚举、区间、默认值）。
+
+把两件事分开，第一次请求就足够支撑「改不改」的决策，第二次只在你真要动手时才发。
+少了 `params` 这一列，agent 连「支不支持 duration」都得再问一次 —— 两次就变成三次。
+
+「两次」是**发现流程**的上界，不是规矩：用户直接点名某个模型时，已知 id 就跳过列表直取详情。
+列表只用来筛候选，不该成为每次操作的必经仪式。
+
+代价是两次请求 = 两次上游 `/v1/models` 往返（详情没法按 id 只取一个，上游没有这个接口）。
+所以读路径加了 **30 秒缓存**（`-models-cache-ttl` 可调，0 关闭），响应里带
+`upstream_age_ms`：0 表示本次刚拉，大于 0 就是这份列表的年龄。
+
+能缓存 30 秒，是因为**缓存的不是合并结果**：`models` 原始列表的变更频率是渠道上下线（小时级），
+而覆盖层改动每次现算。换句话说，缓存只影响「看到的上游有多新」，不影响「刚配的为什么没生效」——
+后者在这个设计里根本不会发生。过期后拉取失败会如实报错，不会拿旧值兜底。
+
+写校验**不走缓存**（`validateOverlays` 直连上游）：校验必须基于当下事实，而写是人工频率，
+多一次往返换「不会用 30 秒前的列表判断模型是否存在」，很划算。
+
+刚在上游加了渠道、要立刻确认时，用 `?refresh=1`（MCP 工具传 `refresh=true`）：
+它只刷新这一次读，不清空缓存 —— 清空会让所有并发请求一起 miss，把小操作放大成一次惊群。
+
+`/admin/state` 与 `/admin/models` **共用同一份缓存**。分成两套的话，
+「面板显示 59 个、agent 列表显示 58 个」会变成常态；同一进程里不该有两个真相。
+`state.upstream.age_ms` 把这份视图的年龄标出来。
+
+`?full=1` 保留，作为人导出 / 调试的逃生舱，**agent 默认不要用**：
+59 个模型 × 每个几千字节的 `parameters`，一次就能吃掉大半个上下文，其中九成字段它用不到。
+
+列表响应自带指路：`{"projection": true, "detail": "/admin/models/{id}"}` ——
+契约跟着响应走，而不是只写在文档里等人转述。
+
+#### 错误是数据，不是一句话
+
+`issues[]` 里的每一条都带 `path`（JSON Pointer，指到具体字段）与 `hint`（下一步怎么改）：
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "校验未通过，未保存",
+    "hint": "按 issues[].path 改对应字段后重试；warnings 不会阻断保存"
+  },
+  "revision": "8fd8e31e8f82e03c",
+  "issues": [
+    {
+      "path": "/models/doubao-seedream-5-0-flash-260915/parameters/n",
+      "message": "parameters.n：min 不能大于 max",
+      "hint": "min/max 只要求出现一边；两边都写时必须 min ≤ max"
+    }
+  ]
+}
+```
+
+判据是**能否自我纠正**：「校验失败」这四个字，人看了要回来翻文档，agent 看了只能
+原样重试一遍。而 `path` 指向哪一行、`hint` 给出可选值，它就能自己改对。
+
+| code | 状态 | 含义 |
+|---|---|---|
+| `revision_mismatch` | 409 | 别人先改了；重新读再算，不要原样重发 |
+| `validation_failed` | 422 | 操作合法但结果会让运行时做错事，按 `issues[].path` 改 |
+| `invalid_op` | 400 | 操作名或字段写错，`error.allowed` 给出可用操作 |
+| `invalid_request` | 400 | 请求形状不对 |
+| `persist_failed` | 500 | 落盘失败，内存仍是旧值 |
+| `upstream_unavailable` | 502 | 拉不到上游，管理端不拿缓存冒充事实 |
+
+#### 管理端 MCP：把配置能力直接交给 agent
+
+REST 已经够用，但让每个 agent 自己写 HTTP 胶水是重复劳动 —— 而本项目的前提就是
+「agent 通过 MCP 使用能力」。所以同一个操作集另开一个 MCP 入口：
+
+```json
+{
+  "mcpServers": {
+    "apiduo-admin": {
+      "type": "http",
+      "url": "http://127.0.0.1:8081/admin/mcp",
+      "headers": { "Authorization": "Bearer <服务身份 api_key>" }
+    }
+  }
+}
+```
+
+| 工具 | 作用 |
+|---|---|
+| `config.get` / `config.models` / `config.model` / `config.drift` / `config.history` | 只读 |
+| `config.apply` | 唯一的写工具：一组 ops + `dry_run` + `if_match` |
+
+`config.apply` 的 `dry_run` **默认 true**。这是刻意的摩擦：agent 拿到新工具时最容易
+直接开写，默认空跑保证第一次调用一定安全，要提交必须显式传 `dry_run=false`。
+REST 侧相反，默认直接写 —— 会手写 HTTP 的调用方已经是显式的了。
+
+工具内部还是走 `commit`，校验、版本、审计一条都不少。不存在「MCP 有后门」这种可能：
+两条传输共用同一份操作实现，不可能出现一套能过、另一套过不了。
+
+#### 变更记录
+
+每次写入追加一行到 `<config>.audit.jsonl`，同时留最近 200 条在内存里：
+
+```json
+{"time":"2026-11-04T23:42:41+08:00","actor":"codex","source":"rest","outcome":"saved",
+ "ops":[{"op":"model.patch","target":"doubao-seedream-mock"}],
+ "revision_before":"515966e6d9fa134b","revision_after":"8fd8e31e8f82e03c","warnings":0}
+```
+
+只记「谁、什么时候、用哪些操作把版本从 A 推到 B」，**不记补丁内容**：
+内容看 `changes` 或 git，日志再存一份等于复制配置，还会顺手把敏感字段带进文件。
+
+`actor` 取 `body.actor` > `X-Admin-Actor` > `User-Agent`。被拒绝的写入也记
+（`outcome: rejected`），因为「agent 在凌晨试了什么」和「它改成了什么」同样重要。
+
+#### 刻意不做的
+
+| 想加的 | 不加的理由 |
+|---|---|
+| `Idempotency-Key` 缓存 | 操作本身幂等，用结构消灭重复提交，比用缓存去重便宜 |
+| 文件锁 / 分布式锁 | `If-Match` 已经能让调用方发现冲突；文件锁只能锁住单机，还会制造新的失败模式 |
+| GraphQL / 通用 JSON Patch | 状态只有四个集合，九个操作就穷举完了，通用性带来的是学习成本 |
+| 字段级权限 | 服务身份是部署者凭据，能改就是能改；细分权限需要第二套身份体系，与本项目前提冲突 |
+
 ## 12. 跑起来
 
 ```bash
@@ -895,14 +1114,18 @@ MCP 入口 `POST http://127.0.0.1:8080/mcp`（Streamable HTTP，无状态）；
 也可用 `file://` 直接打开页面并加 `?api=http://127.0.0.1:8081`（CORS 只放行 localhost / 127.0.0.1 / `null` 来源）。
 `-ui` 为空则不托管页面，`-schema` 为空则 `/admin/schema` 返回 503。
 
-管理端新增端点（除 `/admin/ui` 与 `/admin/healthz` 外全部走 Bearer 服务身份）：
+管理端口有两组端点。**配置读写**的完整清单见 §11（agent 直接读 `GET /admin/manifest`），
+这里只列调试与静态资源：
 
 | 端点 | 用途 |
 |---|---|
-| `GET /admin/state` | 一次返回服务端配置、上游归一化模型、覆盖层、**后端合并结果**、漂移；上游失败时分项标 `ok=false`，不拿缓存冒充事实 |
+| `GET /admin/state` | 一次返回服务端配置、上游归一化模型、覆盖层、`revision`、**后端合并结果**、漂移；上游失败时分项标 `ok=false`，不拿缓存冒充事实 |
 | `GET /admin/schema` | 下发 `packages/model-capabilities.schema.json` 原文，前后端共用同一份契约 |
 | `POST /admin/debug/mcp` | 进程内透传一条 JSON-RPC 到真实 MCP handler，回传原始请求 / 响应 / HTTP 状态 / 耗时 |
 | `GET /admin/ui` | 托管 `prototype/admin.html`（每次读盘，改页面无需重启） |
+| `GET /admin/healthz` | 健康检查：`base_url`、脱敏 key、`config_error`、`revision`、各类计数 |
+
+除 `/admin/ui` 与 `/admin/healthz` 外全部走 Bearer 服务身份。
 
 客户端配置：
 
@@ -993,18 +1216,17 @@ python3 testdata/mock_upstream.py 3999 &
 本地零消耗联调：先起 `python3 testdata/mock_upstream.py 3999`，配置里 `base_url` 指向
 `http://127.0.0.1:3999`，页面连上后所有探针与工具调用都只打本机假上游。
 
-#### 已知问题：手改配置文件不会热更新覆盖层
+#### 手改配置文件也会热更新（原来那条已知问题已修）
 
-`base_url` / `api_key` 走 `config.Store` 的 mtime 热更新，但覆盖层（`models` / `protocols` /
-`disabled` / `settings`）是在 `admin.New` 时读入快照，之后只有 **管理端 `PUT /admin/overlays`**
-会更新它。所以：
+旧版本里 `base_url` / `api_key` 走 `config.Store` 的 mtime 热更新，但覆盖层是在 `admin.New`
+时读入的一份快照，只有 `PUT /admin/overlays` 会更新它 —— 手改 `models` 必须重启。
 
-- 通过页面保存 → 立即生效（推荐）；
-- 直接编辑 config.yaml → 运行时与 `/admin/state` 都还是旧值，**需要重启**。
+根因不是缓存，是**同一份文件有两个读者**。现在 `admin.Handler` 不持有配置，读写都经过
+`config.Store`：页面保存与手改文件是同一条路径，区别只是谁触发写入。
+覆盖层变更后同样会失效模型缓存（`store.OnReload`），不需要额外的 `Reload()` 钩子。
 
-这不是「缓存没刷新」，而是两条读路径不一致。修法有两种：给 `admin.Handler` 加 `Reload()` 并在
-`store.OnReload` 里调用，或让运行时直接读 `store` 里的覆盖层。**本轮未改**，因为同一时间有并行
-会话在改 `admin.go` / `main.go`，避免冲突。
+`TestReloadPicksUpOverlayEdits` 与 `TestReplaceOverlaysPreservesHumanFile` 守住这两条：
+改文件 2 秒内生效；写回不重排、不删注释。
 
 ### 当前实现状态
 
@@ -1018,6 +1240,15 @@ python3 testdata/mock_upstream.py 3999 &
 | 五种协议族：generations / edits_multipart / video_generations / contents_tasks / search_query | ✅ |
 | 出站防护：参考图下载限协议、限公网、限大小、限时长、限重定向 | ✅ |
 | 管理端 API（GET/PUT overlays，校验后落盘） | ✅ |
+| 覆盖层热更新：与部署配置同一个 `Store`，手改文件即生效 | ✅ |
+| 写回保留注释、键序与部署配置；空段删键 | ✅ |
+| 覆盖层版本号（内容哈希）+ `ETag` + `If-Match` 冲突检测（409） | ✅ |
+| 细粒度管理 API：九个幂等操作 + 批量原子 + `dry_run` + 叶子级 `changes` | ✅ |
+| 结构化校验：`issues[].path` + `hint`，可按字段定位 | ✅ |
+| 自描述 `GET /admin/manifest`（端点从路由表生成，含错误码与常用流程） | ✅ |
+| 管理端 MCP：`config.get/models/model/drift/history/apply`，写工具默认空跑 | ✅ |
+| 变更记录 `<config>.audit.jsonl` + `GET /admin/history` | ✅ |
+| 面板适配 `revision`（保存带 If-Match，409 提示刷新而不是盲目重发） | ✅ |
 | 校验分级（`issues` 阻断 / `warnings` 放行） | ✅ |
 | 整条下架 `disabled` + 漂移自查 `GET /admin/drift` | ✅ |
 | 协议族模板 `protocols`（按 kind 补缺 / `_protocol` 显式指定 / 漂移 `inherited`） | ✅ |
@@ -1039,6 +1270,58 @@ python3 testdata/mock_upstream.py 3999 &
 | `edits_multipart` 真实联调 | ⬜ 只对接过 mock（经网关不需要它，只有直连 OpenAI 原厂才用） |
 | 限流、审计、调用记录 | ⬜ 未做 |
 | 提示词改写（`/v1/chat/completions`） | ⬜ 未做 |
+
+### 容器镜像
+
+每次发版同时产出一个镜像，**前端页面与能力契约已经打进去**——部署时不需要额外挂文件，
+也不存在「二进制能跑、管理页 503」这种半残状态：
+
+```bash
+docker run -d --name mcpd \
+  -p 8080:8080 -p 8081:8081 \
+  -e BASE_URL=https://your-newapi.example.com \
+  -e API_KEY=sk-xxx \
+  ghcr.io/apiduo/mcp-for-apiduo:0.0.2
+```
+
+镜像里是什么、为什么是这个布局：
+
+| 路径 | 用途 | 对应 flag 默认值 |
+|---|---|---|
+| `/app/mcpd` | 静态二进制（`CGO_ENABLED=0`） | — |
+| `/app/prototype/admin.html` | 管理页 | `-ui prototype/admin.html` |
+| `/app/packages/model-capabilities.schema.json` | 能力契约 | `-schema packages/...` |
+
+三条路径与二进制的默认值**逐字对齐**，所以镜像里不传 `-ui` / `-schema` 也能直接工作 ——
+这是「前后端打进同一个镜像」真正成立的条件，不是把文件 COPY 进去就完事。
+
+基础镜像是 `distroless/static`（`nonroot`）：
+
+- **不用 scratch**：没有 CA 证书，服务调 HTTPS 上游会直接失败；
+- **不用 alpine**：`RUN apk add` 会让多架构构建引入 QEMU，慢且脆；
+- 代价是没有 shell，`docker exec sh` 进不去，排障靠 `docker logs` 与 `/healthz`。
+
+多架构（`linux/amd64` + `linux/arm64`）不需要 QEMU：镜像里没有任何 `RUN`，
+只是把 CI 里已经交叉编译好的二进制装进去，所以构建是秒级。
+
+要挂配置文件也可以，此时把配置目录挂成可写，审计日志 `<config>.audit.jsonl` 才落得下来：
+
+```bash
+docker run ... -v "$PWD:/app/conf" ghcr.io/apiduo/mcp-for-apiduo:0.0.2 -config /app/conf/config.yaml
+```
+
+包可见性由**组织策略**决定，不是仓库可见性：`apiduo` 组织已允许创建公开包
+（组织下已有 `public` 的容器包），所以首次推送 `ghcr.io/apiduo/mcp-for-apiduo` 应当直接就是公开的。
+
+推送后用一条命令核验（`gh` 需有 `read:packages`）：
+
+```bash
+gh api /orgs/apiduo/packages/container/mcp-for-apiduo --jq .visibility   # 期望 public
+```
+
+万一仍是 private，只能去包设置页改一次：`GITHUB_TOKEN` 对包可见性的 PATCH 恒 404 ——
+这是 REST 路由限制，不是权限没给够，别在 workflow 里加这一步（只会得到一条「假绿」的
+`continue-on-error`）。
 
 ### 发版（push main 即发版）
 

@@ -38,12 +38,14 @@ func decodeState(t *testing.T, w *httptest.ResponseRecorder) stateResponse {
 func TestStateEndpoint(t *testing.T) {
 	h := newTestHandler(t)
 	h.Version = "0.1.0-dev"
-	h.cur.Store(&catalog.Overlays{
+	if _, err := h.store.ReplaceOverlays(catalog.Overlays{
 		Models: map[string]map[string]any{
 			"img-a": {"input": map[string]any{"max_reference_images": 2}},
 		},
 		Settings: catalog.Settings{Defaults: map[string]string{"image": "img-a"}},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	h.Models = func(_ context.Context, _ string) ([]catalog.Model, error) {
 		return []catalog.Model{
 			{"id": "img-a", "kind": "image", "input": map[string]any{"max_reference_images": 3}},

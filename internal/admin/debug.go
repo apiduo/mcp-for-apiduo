@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/apiduo/mcp-for-apiduo/internal/catalog"
@@ -39,6 +38,7 @@ type stateServer struct {
 	BaseURL      string            `json:"base_url"`
 	APIKey       string            `json:"api_key"` // 脱敏
 	ConfigError  string            `json:"config_error"`
+	Revision     string            `json:"revision"` // 覆盖层版本，写请求用它做 If-Match
 	OverlayCount int               `json:"overlay_count"`
 	Defaults     map[string]string `json:"defaults"`
 	Time         string            `json:"time"`
@@ -47,6 +47,7 @@ type stateServer struct {
 type stateUpstream struct {
 	OK     bool            `json:"ok"`
 	Count  int             `json:"count"`
+	AgeMS  int64           `json:"age_ms"` // 这份列表的年龄：0 = 本次刚拉
 	Models []catalog.Model `json:"models"`
 	Error  string          `json:"error,omitempty"`
 }
@@ -80,6 +81,7 @@ func (h *Handler) handleState(w http.ResponseWriter, r *http.Request) {
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			ConfigError:  h.store.LastError(),
+			Revision:     h.Revision(),
 			OverlayCount: len(ov.Models),
 			Defaults:     ov.Settings.Defaults,
 			Time:         time.Now().Format(time.RFC3339),
@@ -96,31 +98,21 @@ func (h *Handler) handleState(w http.ResponseWriter, r *http.Request) {
 		out.Server.Defaults = map[string]string{}
 	}
 
-	key := h.store.Get().APIKey
-	if h.Models == nil || key == "" {
-		msg := "未启用上游模型查询"
-		if key == "" {
-			msg = "缺少服务身份 api_key，无法查询上游"
-		}
-		out.Upstream.Error = msg
-		out.Drift.Error = msg
-		writeJSON(w, http.StatusOK, out)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	models, err := h.Models(ctx, key)
-	if err != nil {
-		msg := strings.ReplaceAll(err.Error(), key, "***")
-		out.Upstream.Error = "拉取上游模型失败: " + msg
+	// 与 /admin/models 共用同一份上游视图（同一个缓存）。
+	// 分成两套会让「面板显示 59 个、agent 列表显示 58 个」变成常态 ——
+	// 同一进程里不该有两个真相。要最新就传 ?refresh=1。
+	snap, apiErr := h.loadModels(r.Context(), parseBool(r.URL.Query().Get("refresh")))
+	if apiErr != nil {
+		out.Upstream.Error = apiErr.Message
 		out.Drift.Error = "上游不可用，差异视图不可用"
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	models := snap.Models
 
 	out.Upstream.OK = true
 	out.Upstream.Count = len(models)
+	out.Upstream.AgeMS = snap.Age.Milliseconds()
 	out.Upstream.Models = models
 	out.Merged = ov.Apply(models)
 	d := ov.Drift(models)
@@ -345,8 +337,11 @@ func CORS(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Debug-Allow-Cost, MCP-Protocol-Version")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers",
+			"Authorization, Content-Type, If-Match, X-Admin-Actor, X-Agent-Name, X-Debug-Allow-Cost, MCP-Protocol-Version, Mcp-Session-Id")
+		// 浏览器里读 ETag 需要显式放行，否则脚本拿不到版本号。
+		w.Header().Set("Access-Control-Expose-Headers", "ETag")
 		w.Header().Set("Access-Control-Max-Age", "600")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
