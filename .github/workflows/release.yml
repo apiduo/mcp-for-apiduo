@@ -1,11 +1,18 @@
 name: Release
 
 # push 到 main 即发版：自增 patch → 跨平台构建 → 打 tag → 建 Release。
+# 补发：workflow_dispatch 传 tag=v0.0.1 —— 检出该 tag、不再打新 tag、只重建 Release。
+#       适用于「tag 推上去了但 Release 步骤失败」这种半成品。
 # 逃生阀：提交信息里带 [skip release] 的 push 整条流水线跳过（workflow_dispatch 不受影响）。
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '补发已存在的 tag（留空 = 按 patch 自增发新版本）'
+        required: false
+        default: ''
 
 permissions:
   contents: write        # 缺这一条，打 tag / 建 Release 会 403
@@ -23,6 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # push 必须钉住 github.sha：github.ref 是分支指针，发版要跑几分钟，
+          # 期间再有 push 就会把 tag 打到不是本次触发的提交上。
+          # 补发时必须检出那个 tag，否则会拿主干代码构建并覆盖 :<version> 的承诺。
+          ref: ${{ inputs.tag || github.sha }}
           fetch-depth: 0        # 浅克隆拿不到历史 tag，版本号会永远从 v0.0.1 起算
 
       - uses: actions/setup-go@v7
@@ -36,36 +47,61 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: Resolve next version
+      - name: Resolve version
         id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # --sort=-v:refname 不能省：字典序会把 v1.9.0 判成新于 v1.10.0
-          PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
-          BASE="${PREV:-v0.0.0}"          # 零 tag 冷启动从 v0.0.0 起算
-          CORE="${BASE#v}"
-          CORE="${CORE%%[-+]*}"           # v1.2.3-rc.1 的后缀会打断算术
-          IFS=. read -r MA MI PA <<< "$CORE"
-          PA="${PA%%[-+]*}"
-          case "$MA$MI$PA" in
-            ''|*[!0-9]*) echo "::error::上一个 tag 不是 vX.Y.Z 形式：$BASE"; exit 1 ;;
-          esac
-          NEW="v${MA}.${MI}.$((PA + 1))"
-          if git rev-parse -q --verify "refs/tags/${NEW}" >/dev/null; then
-            echo "::error::${NEW} 已存在（并发，或有人手打了同名 tag）"; exit 1
+          # 两种模式：auto = push main，自增 patch；tag = 补发已有 tag，不自增。
+          # 补发路径存在的原因：tag 推上去之后 Release 步骤仍可能失败（瞬时 5xx、额度），
+          # 那时重跑若还走 auto，会算出下一个 patch，原 tag 就永远没有 Release。
+          if [ -n "${INPUT_TAG}" ]; then
+            MODE=tag
+            TAG="$INPUT_TAG"
+            git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
+              || { echo "::error::tag ${TAG} 不存在"; exit 1; }
+            # TAG^ 会把 annotated tag peel 到父提交，不会取到自己
+            PREV=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "${TAG}^" 2>/dev/null || true)
+            echo "补发模式：${TAG}（上一个版本：${PREV:-<none>}）"
+          else
+            MODE=auto
+            # --sort=-v:refname 不能省：字典序会把 v1.9.0 判成新于 v1.10.0
+            PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+            BASE="${PREV:-v0.0.0}"          # 零 tag 冷启动从 v0.0.0 起算
+            CORE="${BASE#v}"
+            CORE="${CORE%%[-+]*}"           # v1.2.3-rc.1 的后缀会打断算术
+            IFS=. read -r MA MI PA <<< "$CORE"
+            PA="${PA%%[-+]*}"
+            case "$MA$MI$PA" in
+              ''|*[!0-9]*) echo "::error::上一个 tag 不是 vX.Y.Z 形式：$BASE"; exit 1 ;;
+            esac
+            TAG="v${MA}.${MI}.$((PA + 1))"
+            if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+              echo "::error::${TAG} 已存在（并发，或有人手打了同名 tag）"; exit 1
+            fi
+            echo "Previous: ${PREV:-<none>} -> Next: ${TAG}"
           fi
+          echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
           echo "prev=${PREV}" >> "$GITHUB_OUTPUT"
-          echo "next=${NEW}" >> "$GITHUB_OUTPUT"
-          echo "Previous: ${PREV:-<none>} -> Next: ${NEW}"
+          echo "next=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build changelog
         env:
           PREV: ${{ steps.ver.outputs.prev }}
           TAG: ${{ steps.ver.outputs.next }}
+          MODE: ${{ steps.ver.outputs.mode }}
         run: |
           set -euo pipefail
-          # auto 模式下 tag 还没打，右端点是 HEAD；首个 release 走全量历史但要限长
-          if [ -z "$PREV" ]; then RANGE=HEAD; else RANGE="${PREV}..HEAD"; fi
+          # auto 模式下 tag 还没打，右端点是 HEAD；tag 模式下右端点就是那个 tag。
+          # 首个 release 走全量历史但要限长。
+          if [ "$MODE" = tag ]; then
+            RANGE="${PREV:+$PREV..}${TAG}"
+          elif [ -z "$PREV" ]; then
+            RANGE=HEAD
+          else
+            RANGE="${PREV}..HEAD"
+          fi
           {
             echo "## Changes"
             echo
@@ -125,6 +161,7 @@ jobs:
           echo "smoke ok: ${GOT}"
 
       - name: Create tag
+        if: steps.ver.outputs.mode == 'auto'
         env:
           TAG: ${{ steps.ver.outputs.next }}
         run: |
