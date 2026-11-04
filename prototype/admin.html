@@ -154,9 +154,16 @@ kbd{
    底部一大片灰 —— 面板高度由内容决定，天生对不齐。
    现在面板高度由视口决定，内容在面板里滚：底部一条水平基线，像 Finder / Mail。 */
 .app{
-  display:grid; grid-template-columns:296px minmax(430px,1fr) 396px;
+  /* 两侧栏的宽不再钉死像素，跟着视口走。
+     钉死 296/396 的后果：1280 的窗口里两侧吃掉 54%，中栏只剩 520，
+     参数行的控件被挤成一列；而 1900 以上又白白空着，宽度给不出去。
+     下界 = 左栏放得下模型名 + 徽标；上界 = 再宽也不会更好读。
+     中间那段永远归中栏 —— 那才是要动手改的地方。 */
+  --rail-l:clamp(228px,15.8vw,300px);
+  --rail-r:clamp(288px,20.6vw,392px);
+  display:grid; grid-template-columns:var(--rail-l) minmax(0,1fr) var(--rail-r);
   gap:14px; align-items:stretch;
-  max-width:1660px; margin:0 auto; padding:14px 20px;
+  max-width:1860px; margin:0 auto; padding:14px 20px;
   height:calc(100vh - 56px);
   height:calc(100dvh - 56px);
   min-height:380px;
@@ -167,6 +174,36 @@ kbd{
   display:flex; flex-direction:column;
 }
 .side,.insp{ overflow:hidden }
+
+/* 收起右栏 —— JSON 是参照物，不是常驻。
+   1920 的屏上中栏只有 1100，而右栏那 392 常常只是瞟一眼；
+   收起来把宽度全还给中栏，40px 的脊留在原地，点一下就回来。
+   只在 ≥1181px 生效：更窄时右栏本来就是底部抽屉，收起无意义。 */
+@media (min-width:1181px){
+  .app.insp-off{ grid-template-columns:var(--rail-l) minmax(0,1fr) 40px }
+  .app.insp-off #insp{ padding:0 }
+  .app.insp-off #insp > *:not(.spine){ display:none }
+  .app.insp-off .spine{ display:flex }
+  /* 保存主按钮原本在右栏底部，收起后会跟着消失 —— 搬到顶栏 */
+  body.insp-off .topbar .top-save{ display:inline-flex; height:29px; padding:0 12px; font-size:12px }
+}
+.spine{
+  display:none; flex:1; width:100%; padding:13px 0 15px;
+  flex-direction:column; align-items:center; gap:9px;
+  border:0; background:none; cursor:pointer; color:var(--text-3);
+  transition:color var(--t-micro) var(--ease), background var(--t-micro) var(--ease);
+}
+.spine:hover{ color:var(--text); background:var(--fill) }
+.spine:focus-visible{ outline:2px solid var(--accent); outline-offset:-3px }
+.spine svg{ width:14px; height:14px; flex:none }
+.spine-t{
+  writing-mode:vertical-rl; font-size:11.5px; letter-spacing:.14em;
+  color:inherit; white-space:nowrap;
+}
+.spine-dot{
+  width:6px; height:6px; border-radius:50%; background:var(--warn-ink);
+  flex:none; margin-top:auto; box-shadow:0 0 0 3px var(--fill);
+}
 
 /* ── 侧栏 ─────────────────────────────────────────────────────────── */
 .side-top{ display:flex; flex-direction:column; gap:9px; padding:12px 12px 8px; flex:none }
@@ -409,7 +446,7 @@ select.inp{ cursor:pointer }
 
 .rows{ padding:3px 0 5px }
 .row{
-  display:grid; grid-template-columns:150px minmax(0,1fr) auto;
+  display:grid; grid-template-columns:clamp(118px,9.6vw,150px) minmax(0,1fr) auto;
   gap:10px; align-items:start; padding:7px 15px; border-radius:10px;
   transition:background var(--t-micro) var(--ease);
 }
@@ -627,9 +664,6 @@ pre.json{
 .toast svg{ width:13px; height:13px; color:var(--ok) }
 
 /* ── 响应式 ───────────────────────────────────────────────────────── */
-@media (max-width:1240px){
-  .app{ grid-template-columns:272px minmax(0,1fr) 356px }
-}
 @media (max-width:1180px){
   .app{ grid-template-columns:280px minmax(0,1fr); padding-bottom:104px }
   .kbd-hint{ display:none }
@@ -652,6 +686,7 @@ pre.json{
   .grab:active{ cursor:grabbing }
   .grab .handle{ width:34px; height:5px; border-radius:3px; background:var(--line-2) }
   .insp-h{ padding-top:6px }
+  .insp-fold{ display:none }
   .json-wrap{ min-height:0 }
 }
 @media (max-width:820px){
@@ -1108,6 +1143,9 @@ textarea.dbg-ta:focus{ border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <button role="tab" data-tab="merged" aria-selected="true">合并后</button>
         <button role="tab" data-tab="overlay" aria-selected="false">覆盖层</button>
       </div>
+      <button class="icon-btn insp-fold" id="inspFold" type="button" aria-label="收起合并结果" title="收起合并结果 ⌘\">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg>
+      </button>
       <button class="icon-btn" id="copy" aria-label="复制 JSON" title="复制">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 5.5A2.5 2.5 0 0 0 12.5 3H6a2.5 2.5 0 0 0-2.5 2.5V13A2.5 2.5 0 0 0 6 15.5"/></svg>
       </button>
@@ -1123,6 +1161,11 @@ textarea.dbg-ta:focus{ border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <button class="btn" id="resetAll" title="把当前模型的覆盖层清空">恢复继承</button>
       </div>
     </div>
+    <button class="spine" id="inspSpine" type="button" aria-label="展开合并结果" title="展开合并结果 ⌘\">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg>
+      <span class="spine-t">合并结果</span>
+      <span class="spine-dot" id="spineDot" hidden></span>
+    </button>
   </aside>
 </div>
 
@@ -2885,6 +2928,7 @@ function refreshIssues(){
   const btn = $("#save");
   const busy = btn.dataset.state === "busy";
   const dirty = anyDirty();
+  inspSpineDot(dirty, issues.length > 0);
   btn.disabled = busy || issues.length > 0 || !dirty;
   $(".lbl", btn).textContent = dirty ? "保存覆盖层" : "已同步";
 
@@ -3188,6 +3232,8 @@ document.addEventListener("keydown", e => {
 
   if (mod && e.key.toLowerCase() === "s"){ e.preventDefault(); save(); return }
   if (mod && e.key.toLowerCase() === "k"){ e.preventDefault(); $("#q").focus(); $("#q").select(); return }
+  /* ⌘\ 收放右栏。Mac 上这是「回到上层」的习惯键位，正好是收起参照物。 */
+  if (mod && e.key === "\\"){ e.preventDefault(); inspToggle(); return }
 
   if (e.key === "Escape" && document.activeElement === $("#q")){
     $("#q").value = ""; state.q = ""; renderList();
@@ -4199,6 +4245,35 @@ async function histReloadNow(){
   toast(doc.demo ? "重新加载失败，仍是演示数据" : "已重新加载服务端配置");
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   12. 收起 / 展开右栏
+
+   三栏都常驻是一种浪费：中栏在编辑，右栏只是参照。
+   收起来把 392px 还给中栏，脊留 40px —— 宽度还在原地，点一下就回来。
+   状态记在 localStorage：长期收着的人不该每次刷新都重来一遍。
+   ══════════════════════════════════════════════════════════════════════ */
+const INSP_KEY = "mcp.admin.inspOff";
+
+function inspSet(off, remember){
+  const app = $(".app");
+  if (!app) return;
+  app.classList.toggle("insp-off", !!off);
+  document.body.classList.toggle("insp-off", !!off);
+  if (remember){ try { localStorage.setItem(INSP_KEY, off ? "1" : "0") } catch {} }
+  /* 按钮会在 display:none 里消失，焦点不能跟着一起失踪 */
+  const next = off ? $("#inspSpine") : $("#inspFold");
+  if (next && !next.hidden) next.focus({ preventScroll: true });
+}
+function inspToggle(){ inspSet(!document.body.classList.contains("insp-off"), true) }
+
+/* 脊上的小圆点：收起时看不见校验结果，至少让「有事」看得见。 */
+function inspSpineDot(dirty, bad){
+  const d = $("#spineDot");
+  if (!d) return;
+  d.hidden = !(dirty || bad);
+  d.title = bad ? "有校验冲突" : (dirty ? "有未保存改动" : "");
+}
+
 /* ── 事件绑定 ─────────────────────────────────────────────────────── */
 function bindDebug(){
   const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn) };
@@ -4212,6 +4287,10 @@ function bindDebug(){
   on("#histBody", "click", e => {
     if (e.target.closest('[data-hist="connect"]')){ histClose(); dbgOpen("probe") }
   });
+  on("#inspFold", "click", () => inspSet(true, true));
+  on("#inspSpine", "click", () => inspSet(false, true));
+  /* 上次收起的，这次仍然收起。窄屏不生效（CSS 只认 ≥1181），无需特判。 */
+  try { if (localStorage.getItem(INSP_KEY) === "1") inspSet(true, false) } catch {}
   on("#connChip", "click", () => dbgOpen("probe"));
   on("#connBannerBtn", "click", () => dbgOpen("probe"));
   on("#dbgClose", "click", dbgClose);
