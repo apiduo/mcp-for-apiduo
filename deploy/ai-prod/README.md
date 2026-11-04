@@ -22,15 +22,20 @@
 ssh -i ~/.ssh/id_ed25519_ops root@210.121.44.245 'cd /opt/mcp-for-apiduo && docker compose ps && docker logs --tail 50 mcp-for-apiduo'
 
 # 升级：改 .env 里的版本号（镜像 tag 不带 v），再重建
-ssh ... 'cd /opt/mcp-for-apiduo && sed -i "s/^MCP_IMAGE_TAG=.*/MCP_IMAGE_TAG=0.0.4/" .env && docker compose pull -q && docker compose up -d'
+ssh ... 'cd /opt/mcp-for-apiduo && sed -i "s/^MCP_IMAGE_TAG=.*/MCP_IMAGE_TAG=0.0.7/" .env && docker compose pull -q && docker compose up -d'
 
-# 回滚：把 .env 指回上一个版本即可
-ssh ... 'cd /opt/mcp-for-apiduo && sed -i "s/^MCP_IMAGE_TAG=.*/MCP_IMAGE_TAG=0.0.3/" .env && docker compose pull -q && docker compose up -d'
+# 回滚：把 .env 指回上一个版本即可（.env.bak 是上一次升级前的值）
+ssh ... 'cd /opt/mcp-for-apiduo && sed -i "s/^MCP_IMAGE_TAG=.*/MCP_IMAGE_TAG=0.0.6/" .env && docker compose pull -q && docker compose up -d'
 
 # 管理面板（不对外，走隧道）
 ssh -i ~/.ssh/id_ed25519_ops -N -L 39091:127.0.0.1:39091 root@210.121.44.245
 # 然后浏览器开 http://127.0.0.1:39091/admin/ui ，服务 key 在服务器 /root/.mcp-apiduo-token
 ```
+
+> ⚠️ `/opt/mcp-for-apiduo/` 下的 `docker-compose.yml` 与 nginx 片段是**本目录的副本**，
+> 不是软链。改本目录之后必须同步过去并 `docker compose up -d` —— 2026-11-05 就踩过：
+> 只改了仓库里的 `command`（加 `-trust-proxy`），服务器上的副本没变，参数等于没加，
+> 审计日志里的来源依旧全是 Docker 网关地址。
 
 ## 管理端为什么放开了（一次有意的偏离）
 
@@ -72,3 +77,4 @@ ssh -i ~/.ssh/id_ed25519_ops -N -L 39091:127.0.0.1:39091 root@210.121.44.245
 | 2026-11-05 | 管理端改为同域放行（`/admin/*` 反代 39091），验证矩阵加「无 key 401 / 带 key 200」 |
 | 2026-11-05 | 升级 0.0.4（面板新增「变更记录」时间线）；`.env.bak` 留 0.0.3 供回滚 |
 | 2026-11-05 | 升级 0.0.5（三栏宽度随视口缩放 + 右栏可收起）；`.env.bak` 留 0.0.4 供回滚 |
+| 2026-11-05 | 对抗审查后 0.0.6/0.0.7：身份三态、CORS 不再当鉴权、探活脱敏、CSP、`-trust-proxy`；nginx `/mcp` 判据收紧为 `^Bearer[ \t]+\S` |

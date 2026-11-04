@@ -16,7 +16,7 @@ x-logging: &default-logging
 
 services:
   mcp:
-    image: ghcr.io/apiduo/mcp-for-apiduo:${MCP_IMAGE_TAG:-0.0.5}
+    image: ghcr.io/apiduo/mcp-for-apiduo:${MCP_IMAGE_TAG:-0.0.7}
     container_name: mcp-for-apiduo
     restart: unless-stopped
     logging: *default-logging
