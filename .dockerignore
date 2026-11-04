@@ -1,0 +1,12 @@
+# 构建上下文只需要三样东西：两个 linux 二进制、管理页、契约文件。
+# 只排除不需要的，不写白名单 —— 白名单会让以后新增的运行时资源静默漏打。
+
+.git
+.github
+.workbuddy
+docs
+testdata
+
+# 镜像只收 linux/amd64 与 linux/arm64；其余平台的二进制不传进上下文（省 ~26MB）
+dist/mcpd-darwin-*
+dist/mcpd-windows-*

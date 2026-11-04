@@ -1,6 +1,6 @@
 name: Release
 
-# push 到 main 即发版：自增 patch → 跨平台构建 → 打 tag → 建 Release。
+# push 到 main 即发版：自增 patch → 跨平台构建 → 镜像冒烟 → 推 GHCR → 打 tag → 建 Release。
 # 补发：workflow_dispatch 传 tag=v0.0.1 —— 检出该 tag、不再打新 tag、只重建 Release。
 #       适用于「tag 推上去了但 Release 步骤失败」这种半成品。
 # 逃生阀：提交信息里带 [skip release] 的 push 整条流水线跳过（workflow_dispatch 不受影响）。
@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write        # 缺这一条，打 tag / 建 Release 会 403
+  packages: write        # 缺这一条，docker push ghcr.io 会 403
 
 # 同一分支串行：两个进程同时读到同一个 tag 再各自自增会撞版本。
 # 刻意不写 cancel-in-progress:true —— 发版跑一半被中断会留下「镜像/产物已出、tag 未打」的中间态。
@@ -27,6 +28,8 @@ jobs:
   release:
     if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[skip release]') }}
     runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -159,6 +162,74 @@ jobs:
           GOT=$(jq -r .version "$RUNNER_TEMP/healthz.json")
           [ "$GOT" = "$VERSION" ] || { echo "::error::自报版本 ${GOT} != ${VERSION}"; exit 1; }
           echo "smoke ok: ${GOT}"
+
+      # ── 镜像是发布物的一部分：前端页面与 schema 都打进去 ──────────────
+      # 顺序刻意如此：构建 → 冒烟 → 推送 → 打 tag。
+      # 镜像推成功之后才打 tag，任何一步失败都不会留下「有 tag、没镜像」的半成品。
+      - name: Build image (amd64, for smoke)
+        run: |
+          set -euo pipefail
+          IMG=$(printf '%s' "$IMAGE" | tr 'A-Z' 'a-z')
+          docker buildx create --use --name multi --driver docker-container
+          # --load 只能落单平台；多平台镜像只能推、不能在本地 docker run
+          docker buildx build --platform linux/amd64 --load \
+            --build-arg TARGETARCH=amd64 \
+            -t "${IMG}:smoke" .
+
+      # 三条断言分别证明：二进制版本注进去了、管理页在镜像里、契约文件在镜像里。
+      # 少任何一条，「前后端都打进镜像」就只是口头承诺。
+      - name: Smoke test image
+        env:
+          TAG: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          IMG=$(printf '%s' "$IMAGE" | tr 'A-Z' 'a-z')
+          docker run -d --name mcpd-smoke \
+            -p 18090:8080 -p 18091:8081 \
+            -e BASE_URL=http://127.0.0.1:9 -e API_KEY=smoke "${IMG}:smoke"
+          trap 'docker rm -f mcpd-smoke >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -sf -o "$RUNNER_TEMP/img.json" http://127.0.0.1:18090/healthz; then break; fi
+            sleep 0.3
+          done
+          curl -sf -o "$RUNNER_TEMP/img.json" http://127.0.0.1:18090/healthz \
+            || { echo "::error::容器没起来"; docker logs mcpd-smoke; exit 1; }
+          GOT=$(jq -r .version "$RUNNER_TEMP/img.json")
+          [ "$GOT" = "$TAG" ] || { echo "::error::镜像自报 ${GOT} != ${TAG}"; exit 1; }
+
+          # 管理页（免鉴权的 /admin/ui），验证 admin.html 真的在镜像里
+          curl -sf -o "$RUNNER_TEMP/ui.html" http://127.0.0.1:18091/admin/ui \
+            || { echo "::error::镜像里没有管理页"; docker logs mcpd-smoke; exit 1; }
+          grep -qi '<!doctype html' "$RUNNER_TEMP/ui.html" \
+            || { echo "::error::/admin/ui 返回的不是页面"; exit 1; }
+
+          # 能力契约（需服务身份），验证 schema 真的在镜像里
+          curl -sf -H "Authorization: Bearer smoke" -o "$RUNNER_TEMP/schema.json" \
+            http://127.0.0.1:18091/admin/schema \
+            || { echo "::error::镜像里没有 schema"; exit 1; }
+          python3 -c "import json;json.load(open('$RUNNER_TEMP/schema.json'))" \
+            || { echo "::error::schema 不是合法 JSON"; exit 1; }
+
+          echo "image smoke ok: ${GOT}"
+
+      - name: Push multi-arch image
+        env:
+          TAG: ${{ steps.ver.outputs.next }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IMG=$(printf '%s' "$IMAGE" | tr 'A-Z' 'a-z')
+          VERSION="${TAG#v}"          # git tag 带 v，镜像 tag 不带
+          SHA7=$(git rev-parse --short=7 HEAD)
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # 纯 COPY 的镜像，多架构不需要 QEMU：两个平台都只是把已编译好的二进制装进去
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -t "${IMG}:${VERSION}" \
+            -t "${IMG}:latest" \
+            -t "${IMG}:sha-${SHA7}" \
+            --push .
 
       - name: Create tag
         if: steps.ver.outputs.mode == 'auto'
