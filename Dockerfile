@@ -22,6 +22,7 @@ COPY dist/mcpd-linux-${TARGETARCH} /app/mcpd
 
 # 与 flag 默认值对齐：不传 -ui / -schema 也能正常托管。
 COPY prototype/admin.html /app/prototype/admin.html
+COPY prototype/playground.html /app/prototype/playground.html
 COPY packages/model-capabilities.schema.json /app/packages/model-capabilities.schema.json
 
 # nonroot（uid 65532）。二进制与静态文件都是只读挂载，不需要写权限。

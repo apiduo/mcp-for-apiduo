@@ -97,7 +97,10 @@ func TestEncodeJSON(t *testing.T) {
 // 解析 multipart 请求体，返回字段表与文件 part 列表。
 type parsedForm struct {
 	fields map[string]string
-	files  []struct{ name, filename, ctype string; size int }
+	files  []struct {
+		name, filename, ctype string
+		size                  int
+	}
 }
 
 func parseMultipart(t *testing.T, body []byte, contentType string) parsedForm {
@@ -121,7 +124,10 @@ func parseMultipart(t *testing.T, body []byte, contentType string) parsedForm {
 		}
 		if part.FileName() != "" {
 			data, _ := io.ReadAll(part)
-			out.files = append(out.files, struct{ name, filename, ctype string; size int }{
+			out.files = append(out.files, struct {
+				name, filename, ctype string
+				size                  int
+			}{
 				part.FormName(), part.FileName(), part.Header.Get("Content-Type"), len(data),
 			})
 		} else {
@@ -232,36 +238,92 @@ func TestEncodeMultipartFetchError(t *testing.T) {
 }
 
 // 数组/对象无法用表单表达，必须跳过而不是写成 "[object]" 一类的垃圾。
-func TestEncodeMultipartSkipsNonScalar(t *testing.T) {
+// 表单只能表达标量。以前是静默跳过 —— 那会让「参数没生效」伪装成「参数不适用」，
+// 在计费接口上是最贵的一类错：钱花了，图不对，还没人报错。现在直接拒绝并指出字段。
+func TestEncodeMultipartRejectsNonScalar(t *testing.T) {
+	var calls []string
+	for _, tc := range []struct {
+		name string
+		v    any
+	}{
+		{"对象", map[string]any{"k": "v"}},
+		{"数组", []string{"x", "y"}},
+	} {
+		_, _, err := EncodeMultipart(context.Background(), map[string]any{
+			"model": "m",
+			"image": []string{"https://a/1.png"},
+			"extra": tc.v,
+		}, fakeFetcher(&calls))
+		if err == nil {
+			t.Fatalf("%s 应报错，而不是静默丢弃", tc.name)
+		}
+		if !strings.Contains(err.Error(), "extra") {
+			t.Errorf("%s：错误要指出字段名，否则多参数时无法定位: %v", tc.name, err)
+		}
+	}
+
+	// nil 当作「没传」：不该因此报错，也不该写成一个空字段
+	body, ct, err := EncodeMultipart(context.Background(), map[string]any{
+		"model": "m", "image": []string{"https://a/1.png"}, "quality": nil,
+	}, fakeFetcher(&calls))
+	if err != nil {
+		t.Fatalf("nil 字段应视为未传: %v", err)
+	}
+	if _, ok := parseMultipart(t, body, ct).fields["quality"]; ok {
+		t.Error("nil 不该写成表单字段")
+	}
+}
+
+// 标量都要能被表达：布尔丢了就是「开关没生效」，浮点不能带多余尾巴。
+func TestEncodeMultipartScalarTypes(t *testing.T) {
 	var calls []string
 	body, ct, err := EncodeMultipart(context.Background(), map[string]any{
-		"model": "m",
-		"image": []string{"https://a/1.png"},
-		"extra": map[string]any{"k": "v"},
-		"tags":  []string{"x", "y"},
+		"model":      "m",
+		"image":      []string{"https://a/1.png"},
+		"watermark":  true,
+		"background": false,
+		"n":          2,
+		"duration":   5.0,
+		"ratio":      "16:9",
 	}, fakeFetcher(&calls))
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := parseMultipart(t, body, ct)
-	if _, ok := f.fields["extra"]; ok {
-		t.Error("对象不该被写成表单字段")
+	want := map[string]string{
+		"watermark":  "true",
+		"background": "false",
+		"n":          "2",
+		"duration":   "5",
+		"ratio":      "16:9",
 	}
-	if _, ok := f.fields["tags"]; ok {
-		t.Error("数组不该被写成表单字段")
+	for k, v := range want {
+		if got, ok := f.fields[k]; !ok || got != v {
+			t.Errorf("字段 %s = %q（存在=%v），期望 %q", k, got, ok, v)
+		}
 	}
 }
 
 func TestFilenameFor(t *testing.T) {
-	cases := []struct{ url, mime, want string }{
-		{"https://a/b/c.png", "image/png", "c.png"},
-		{"https://a/b/c", "image/jpeg", "c.jpg"},
-		{"https://a/b/c", "image/webp", "c.webp"},
-		{"https://a/", "image/png", "image.png"},
+	cases := []struct {
+		url, mime string
+		idx       int
+		want      string
+	}{
+		{"https://a/b/c.png", "image/png", 0, "c.png"},
+		{"https://a/b/c", "image/jpeg", 0, "c.jpg"},
+		{"https://a/b/c", "image/webp", 0, "c.webp"},
+		{"https://a/", "image/png", 0, "image.png"},
+		// data URI 没有路径（url.Parse 把内容放进 Opaque），必须回落而不是把整个 URI 当名字
+		{"data:image/png;base64,AAAA", "image/png", 0, "image.png"},
+		{"data:image/jpeg;base64,AAAA", "image/jpeg", 0, "image.jpg"},
+		// 多图必须带序号：同名会让上游覆盖或只认第一张
+		{"https://a/b/c.png", "image/png", 1, "2-c.png"},
+		{"data:image/png;base64,AAAA", "image/png", 2, "3-image.png"},
 	}
 	for _, c := range cases {
-		if got := filenameFor(c.url, c.mime, 0); got != c.want {
-			t.Errorf("filenameFor(%q,%q) = %q，期望 %q", c.url, c.mime, got, c.want)
+		if got := filenameFor(c.url, c.mime, c.idx); got != c.want {
+			t.Errorf("filenameFor(%q,%q,%d) = %q，期望 %q", c.url, c.mime, c.idx, got, c.want)
 		}
 	}
 }
@@ -270,9 +332,9 @@ func TestFilenameFor(t *testing.T) {
 // 这一层必须由协议族消化，否则调用方要自己拼数组。
 func TestShapeArkContents(t *testing.T) {
 	out, err := shapeArkContents(map[string]any{
-		"model":  "doubao-seedance",
-		"prompt": "海边日落",
-		"image":  []string{"https://a/1.png", "https://a/2.png"},
+		"model":        "doubao-seedance",
+		"prompt":       "海边日落",
+		"image":        []string{"https://a/1.png", "https://a/2.png"},
 		"duration":     float64(5),
 		"aspect_ratio": "16:9", // 契约名；上游叫 ratio
 	})

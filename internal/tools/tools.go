@@ -52,13 +52,15 @@ func Register(s *mcp.Server, d *Deps) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "image.generate",
 		Description: "生成图片。不传 reference_images 即文生图，传了即图生图——模式由垫图推导，无需单独声明。" +
-			"若模型是异步的，立即返回 task_id，用 task.get 查询结果。",
+			"若模型是异步的，立即返回 task_id，用 task.get 查询结果。" +
+			"size/n/quality 留空即交给上游默认；若从提示词推断，只能取 models.list 里声明的 enum 值，不要臆造。",
 	}, d.generateImage)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "video.generate",
 		Description: "生成视频。语义与 image.generate 相同，产物是视频；" +
-			"传 reference_images 可做图生视频。多数视频模型是异步的，请用 task.get 轮询。",
+			"传 reference_images 可做图生视频。多数视频模型是异步的，请用 task.get 轮询。" +
+			"duration/size 留空即交给上游默认；从提示词推断时只能取画像声明的 enum 值。",
 	}, d.generateVideo)
 
 	mcp.AddTool(s, &mcp.Tool{

@@ -50,6 +50,17 @@ jobs:
           go vet ./...
           go test ./...
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # CLI 是零依赖的 Node 包，测试会起本地 mock MCP，不碰真实上游。
+      - name: Test CLI
+        working-directory: packages/cli
+        run: |
+          set -euo pipefail
+          npm test
+
       - name: Resolve version
         id: ver
         env:

@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -28,8 +29,10 @@ const (
 // 所以它必须当作 SSRF 面来对待：能访问 127.0.0.1 或 10.0.0.0/8，
 // 就相当于给调用方一个内网探测与打洞的接口，而日志里只会显示「一次生成」。
 //
-// 只允许 http/https + 公网地址。不提供配置开关：这是安全默认值，
-// 一旦可关，最省事的部署一定会把它关掉。内网图床走 generations 模式（由上游去取 URL）。
+// 只允许 http/https + 公网地址；另外允许 data:image/* —— 那是 CLI 把本地小图
+// 内联进请求用的，不发起任何网络请求，所以不经过拨号层校验，但仍然限 image/* 与 20 MiB。
+// 不提供配置开关：这是安全默认值，一旦可关，最省事的部署一定会把它关掉。
+// 内网图床走 generations 模式（由上游去取 URL）。
 type fetcher struct {
 	hc *http.Client
 }
@@ -86,7 +89,13 @@ func newFetcher() *fetcher {
 
 // Fetch 下载一个外部资源，返回内容与 Content-Type。
 func (f *fetcher) Fetch(ctx context.Context, rawURL string) ([]byte, string, error) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
+	raw := strings.TrimSpace(rawURL)
+	// CLI 传本地图片时用 data URI 内联：只解码，不联网，不走下面的公网校验。
+	if len(raw) >= 5 && strings.EqualFold(raw[:5], "data:") {
+		return decodeDataURI(raw[5:], maxFetchBytes)
+	}
+
+	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("参考图地址不合法: %w", err)
 	}
@@ -127,6 +136,64 @@ func (f *fetcher) Fetch(ctx context.Context, rawURL string) ([]byte, string, err
 	ct := resp.Header.Get("Content-Type")
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = strings.TrimSpace(ct[:i])
+	}
+	return data, ct, nil
+}
+
+// decodeDataURI 解 data:image/...;base64,... 形态的参考图。
+//
+// 它不发起网络请求，所以不存在 SSRF 面；但它是「把调用方的字节塞进上游请求」
+// 的入口，边界仍然要有：只收 image/*，解码前后都按 max 截断。
+func decodeDataURI(body string, max int) ([]byte, string, error) {
+	comma := strings.IndexByte(body, ',')
+	if comma < 0 {
+		return nil, "", errors.New("data URI 缺少逗号分隔符")
+	}
+	meta, payload := body[:comma], body[comma+1:]
+	base64Encoded := false
+	if strings.HasSuffix(strings.ToLower(meta), ";base64") {
+		base64Encoded = true
+		meta = meta[:len(meta)-len(";base64")]
+	}
+	ct := strings.TrimSpace(meta)
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	// MIME 类型大小写不敏感，但上游实现常按字符串比较：统一成小写再往下走。
+	ct = strings.ToLower(ct)
+	if !strings.HasPrefix(ct, "image/") {
+		return nil, "", fmt.Errorf("data URI 只支持 image/*，收到 %q", ct)
+	}
+
+	var data []byte
+	var err error
+	if base64Encoded {
+		// 先按长度粗算，别为一个超大字符串先分配解码缓冲。
+		if len(payload) > (max/3+1)*4 {
+			return nil, "", fmt.Errorf("参考图超过上限 %d 字节", max)
+		}
+		data, err = base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			data, err = base64.RawStdEncoding.DecodeString(payload)
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("data URI base64 解码失败: %w", err)
+		}
+	} else {
+		s, decErr := url.PathUnescape(payload)
+		if decErr != nil {
+			return nil, "", fmt.Errorf("data URI 转义解码失败: %w", decErr)
+		}
+		data = []byte(s)
+	}
+	if len(data) > max {
+		return nil, "", fmt.Errorf("参考图超过上限 %d 字节", max)
+	}
+	if len(data) == 0 {
+		return nil, "", errors.New("data URI 解出来是空内容")
 	}
 	return data, ct, nil
 }

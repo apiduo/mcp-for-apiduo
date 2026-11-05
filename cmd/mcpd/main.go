@@ -35,6 +35,7 @@ func main() {
 		addr       = flag.String("addr", envOr("MCP_HTTP_ADDR", ":8080"), "MCP 监听地址")
 		adminAddr  = flag.String("admin-addr", envOr("MCP_ADMIN_ADDR", ":8081"), "管理端监听地址")
 		uiPath     = flag.String("ui", "prototype/admin.html", "管理端页面文件路径；为空则不托管")
+		playground = flag.String("playground", "prototype/playground.html", "客户调试台页面文件路径；为空则不托管")
 		schemaPath = flag.String("schema", "packages/model-capabilities.schema.json", "模型能力契约文件路径；为空则不提供 /admin/schema")
 		cacheTTL   = flag.Duration("models-cache-ttl", 30*time.Second, "管理端读路径缓存上游模型列表的时长；0 表示关闭")
 		trustProxy = flag.String("trust-proxy", "", "在反向代理后面时设为 x-real-ip，审计日志才会记真实来源（默认关闭）")
@@ -101,6 +102,14 @@ func main() {
 	// 调试端点走与真实客户端完全相同的 handler；injectKey 保证用服务身份。
 	adm.MCP = injectKey(httpHandler, store)
 	mcpMux.HandleFunc("/healthz", publicHealth(store, version))
+
+	// 客户调试台与 /mcp 同源部署：页面拿客户自己的 Key 直接打 /mcp，
+	// 因此不需要给公网 API 开跨域口子（CORS 一开就是所有站点）。
+	// frame-ancestors 放行 https 宿主，为将来嵌进 new-api 留位置；
+	// 管理页仍然禁止嵌入（它存着服务身份）。
+	mcpMux.HandleFunc("/playground", func(w http.ResponseWriter, r *http.Request) {
+		admin.ServePage(w, r, *playground, "'self' https: http://localhost:* http://127.0.0.1:*")
+	})
 
 	adminMux := http.NewServeMux()
 	adm.Routes(adminMux)

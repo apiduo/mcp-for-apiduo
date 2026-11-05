@@ -120,6 +120,11 @@ func (c *Client) doRaw(ctx context.Context, apiKey, method, path string, body []
 		return data, nil
 	}
 	upErr := parseError(resp.StatusCode, data)
+	// 错误体是外部输入：4xx 常把请求头里的 key 原样回显
+	// （"Incorrect API key provided: sk-xxx"）。它要进日志、进 MCP 响应、进终端，
+	// 所以必须和网络错误一样过一遍脱敏 —— 只覆盖一半等于没覆盖。
+	upErr.Msg = redact(upErr.Msg, apiKey)
+	upErr.Code = redact(upErr.Code, apiKey)
 	upErr.Method, upErr.Path = method, path
 	return nil, upErr
 }
@@ -178,12 +183,21 @@ func truncate(b []byte, n int) []byte {
 	return b[:n]
 }
 
+// redact 抹掉文本里出现的 key。空 key 原样返回 —— 没有可比对的秘密时，
+// 把 "***" 塞进去只会让错误信息更难读。
+func redact(s, apiKey string) string {
+	if apiKey == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, apiKey, "***")
+}
+
 // redactErr 从网络错误里抹掉可能出现的 key（URL/Header 回显）。
 func redactErr(err error, apiKey string) error {
 	if err == nil || apiKey == "" {
 		return err
 	}
-	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), apiKey, "***"))
+	return fmt.Errorf("%s", redact(err.Error(), apiKey))
 }
 
 // ListModels 拉取全部模型。返回解析后的对象与上游原始字节（便于排障）。

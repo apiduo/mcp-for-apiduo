@@ -6,8 +6,9 @@
 
 ```
 公网 → nginx :443 (mcp.apiduo.cn)
-         ├── /mcp      → 127.0.0.1:39090 → 容器 :8080 → apiduo:3000 (new-api, apiduo_default 网络)
-         └── /healthz  → 同上
+         ├── /mcp        → 127.0.0.1:39090 → 容器 :8080 → apiduo:3000 (new-api, apiduo_default 网络)
+         ├── /playground → 同上（客户调试台，公开静态页）
+         └── /healthz    → 同上
        /admin/*  → 127.0.0.1:39091（同域放行；页面公开，读写要 key）
 ```
 
@@ -46,9 +47,19 @@ ssh -i ~/.ssh/id_ed25519_ops -N -L 39091:127.0.0.1:39091 root@210.121.44.245
 |---|---|---|
 | `/admin/ui` | 无 | 纯静态 HTML（约 200KB），不含任何数据 |
 | `/admin/healthz` | 无 | 探活 |
+| `/playground` | 无 | 客户调试台，公开静态页；用访问者自己填的 Key 调 `/mcp`，不碰服务身份 |
 | 其余 `/admin/*` | **Bearer 服务 key** | 没有 key 一律 401；面板打开后要在「连接 / 探针」里填 key |
 
-所以「能打开页面」不等于「能改配置」。但必须承认：**拿到 key 的人可以改配置，也能调生成工具花钱**。
+所以「能打开页面」不等于「能改配置」。`/playground` 同理：它只是一张表单，
+Key 填在浏览器里、走 `/mcp` 的 Bearer，页面本身不持有任何凭据。
+
+升级后确认一下两个页面都在：
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' https://mcp.apiduo.cn/playground
+curl -s https://mcp.apiduo.cn/ | grep -o '"playground":"[^"]*"'
+```
+但必须承认：**拿到 key 的人可以改配置，也能调生成工具花钱**。
 用这个 key 的地方还有 new-api 的令牌列表（名称 `mcp-apiduo`），泄露后两步都要处理：
 `docker exec apiduo` 里删令牌 + 重新生成 → 更新 `/www/data/mcp-for-apiduo/config.yaml` → 重启容器。
 

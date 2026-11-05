@@ -276,33 +276,56 @@ func debugError(method, name string, resp any) string {
 
 // handleUI 托管单文件管理页面。每次请求读盘，改页面无需重启进程。
 func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
+	if h.UIPath == "" {
+		http.Error(w, "未配置页面路径（启动参数 -ui）", http.StatusServiceUnavailable)
+		return
+	}
+	ServePage(w, r, h.UIPath, "'none'")
+}
+
+// ServePage 托管单文件页面：每次读盘、禁缓存、统一安全头。
+//
+// 两个页面的差别只有 frame-ancestors：
+//   - 管理面板存着服务身份 key，禁止任何页面嵌入（'none'）；
+//   - 客户调试台未来要嵌进 new-api，允许 https 宿主与 localhost（本地联调）。
+//
+// 允许嵌入的页面不能下发 X-Frame-Options（它不支持白名单，DENY 会把
+// frame-ancestors 一起废掉）；禁止嵌入的页面仍然补一条，给不看 CSP 的老客户端。
+func ServePage(w http.ResponseWriter, r *http.Request, path, frameAncestors string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.UIPath == "" {
-		http.Error(w, "未配置页面路径（启动参数 -ui）", http.StatusServiceUnavailable)
+	if path == "" {
+		http.Error(w, "未配置页面路径（启动参数 -ui / -playground）", http.StatusServiceUnavailable)
 		return
 	}
-	data, err := os.ReadFile(h.UIPath)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		http.Error(w, "读取页面失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if frameAncestors == "" {
+		frameAncestors = "'none'"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	// 页面是公开的，而它把服务身份 key 存在 sessionStorage 里 ——
+	// 页面是公开的，而管理页把服务身份 key 存在 sessionStorage 里 ——
 	// 一旦有脚本注入，等同于交出凭证。CSP 不防「页面自己写的内联脚本」
 	// （单文件页面必须允许 inline），但能挡住外链脚本、eval、以及把数据发去第三方。
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
-			"img-src 'self' data: blob: https:; font-src 'self' data:; "+
+			"img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; "+
+			"media-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; "+
+			"font-src 'self' data:; "+
 			"connect-src 'self' https: http://localhost:* http://127.0.0.1:*; "+
-			"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+			"base-uri 'none'; form-action 'none'; frame-ancestors "+frameAncestors)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	if frameAncestors == "'none'" {
+		w.Header().Set("X-Frame-Options", "DENY")
+	}
 	_, _ = w.Write(data)
 }
 
@@ -369,7 +392,6 @@ func CORS(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
 
 func localOrigin(raw string) bool {
 	if raw == "null" { // file:// 打开的本地页面

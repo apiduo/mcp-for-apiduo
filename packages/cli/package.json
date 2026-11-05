@@ -1,0 +1,33 @@
+{
+  "name": "@apiduo/cli",
+  "version": "0.1.0",
+  "description": "apiduo MCP 的零依赖命令行：模型发现、图片/视频生成、检索、任务轮询",
+  "type": "module",
+  "bin": {
+    "apiduo": "bin/apiduo.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "apiduo",
+    "image-generation",
+    "video-generation",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apiduo/mcp-for-apiduo.git",
+    "directory": "packages/cli"
+  }
+}

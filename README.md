@@ -200,6 +200,7 @@ internal/
   admin/             管理端：九个幂等操作（ops）、manifest、审计、管理端 MCP
 packages/
   model-capabilities.schema.json   模型能力扩展的机器可读定义（draft 2020-12，版本 4）
+  cli/                             命令行客户端：Node 零依赖，只连 /mcp
 prototype/
   admin.html         管理端交互原型（单文件，无外部依赖）
 testdata/
@@ -868,6 +869,51 @@ models:
 收起只在 ≥1181 生效：更窄时右栏本来就是底部抽屉，再收起没有意义。
 脊上留一个小圆点，收起时看不见校验结果，至少让「有未保存改动 / 有冲突」看得见。
 
+### 三栏共用一个 60px 表头，其余靠它对齐
+
+宽度自适应之后，剩下的问题是竖向：三栏的顶边在同一条线上，但**内容起点**不是。
+左栏是搜索框 + 五档筛选（93px），中栏是标题 + 副标题（62px），右栏是标题 + 选项卡（58px）——
+三条底边各差一截，眼睛读到的是「三张长短不一的卡片」，不是一栏一栏的表。
+
+修法不是把三块都调到 93px（那会让中栏和右栏空出 30px 的荒地），
+而是**把不该待在表头里的东西挪出去**：筛选条管的是「列表怎么看」，不是这一栏的标题，
+它贴到列表顶部（`position:sticky`，滚动时才浮出边线）。于是三个表头都只剩一行，
+统一钉成 `--head-h: 60px`，三条底边落在同一条水平线上：
+
+```css
+.pane-h{ height:var(--head-h); border-bottom:1px solid var(--line) }
+.side-top,.main-h,.insp-h{ height:var(--head-h) }
+```
+
+顺带修掉的三个连带问题：
+
+- **窗口不再滚**。原来 `.app{ height:calc(100dvh - 56px) }` 是用减法反推顶栏高度：
+  顶栏一换行、或者上面多出一条连接提示条，减法就失准，底部两个页脚会被窗口切掉。
+  现在 `body` 是 `100dvh` 的纵向 flex，顶栏、提示条、三栏各占各的，三栏底部永远齐平。
+- **中栏内容左右对称**。原先 `padding-right:8px` + `scrollbar-gutter:stable` 让右侧比左侧多 12px；
+  改成 `scrollbar-gutter:stable both-edges`，卡片永远居中。
+- **五档筛选不再被切**。`flex:none` + 固定内边距在 228px 的最窄栏里会溢出，
+  「未声明」被裁掉半个字；改成 `flex:1 1 auto; min-width:max-content`，最窄栏也排得下。
+
+### 同步 / 异步不是两个开关，是一个「执行协议」
+
+`execution.task`（sync 直返 / async 任务 ID）和 `execution.transport`（generations /
+edits_multipart / video_generations / contents_tasks / search_query）是两个正交字段，
+界面上也老实做成了两行 —— 但 2 × 5 里有一半组合客户端根本走不通（sync + video_generations）。
+选错了不会当场报错，要等客户端调用才发现。
+
+现在合成一个选择：下拉里按「同步 · 直返」「异步 · 任务 ID」分两组，只列成立的组合；
+非常规上游切「自定义」，`task` / `transport` 两行照旧分别可写（缩进 + 竖线，读作上面那个选择的展开）。
+
+三个必须守住的三态：
+
+- **缺一个键就不算命中组合**。只有 `task` 和 `transport` 都真的存在，才显示那一条协议；
+  否则落到「自定义」并标「未声明」—— 拿默认值凑一个组合，等于替上游撒谎。
+- **没声明 ≠ 说了 sync**。`task` 缺失时两个按钮都不选中。
+- **协议模板要参与合并**。前端 `merged()` 原来只 merge(上游, 覆层)，漏了「先按 kind 用模板补缺」这一步，
+  于是视频模型显示成「同步直返 · generations」，而客户端实际走的是内置的异步视频协议。
+  现在与 Go 侧 `catalog.ApplyOne` 同序：模板补缺 → 上游值优先 → 覆层最后压上。
+
 ### 全局配置只占一条，不占一屏
 
 协议模板是全局配置，却挂在每个模型工作区的最上面 —— 位置最贵，内容最少。
@@ -886,6 +932,67 @@ models:
 结果得到白底白字。原因是 `currentColor` 在计算值阶段取**本元素最终**的 `color`，
 同一规则里把 `color` 改成 surface，`currentColor` 就跟着变成 surface。改成在容器上定义
 `--kd-ink` 并让按钮 `background:var(--kd-ink)`，两者才真正解耦。
+
+### 客户调试台：和 `/mcp` 同源，用客户自己的 Key
+
+管理面板回答「怎么配」，调试台回答「配好之后长什么样」。两件事面向的人不同，
+所以是两页：`prototype/playground.html`，挂在 MCP 端口的 `GET /playground`
+（`https://mcp.apiduo.cn/playground`），**公开、无需服务身份**。
+
+它不发管理请求，只发客户在页面里填的那把 Key：
+
+```
+页面（与 /mcp 同源） → POST /mcp
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"image.generate",...}}
+Authorization: Bearer <客户自己的 key>
+```
+
+三个刻意的选择：
+
+- **同源，不开 CORS**。页面和 `/mcp` 由同一个进程、同一个域名提供，浏览器不需要
+  预检。给公网 API 开 `Access-Control-Allow-Origin: *` 是另一件事，不能为了一个
+  调试页顺手放开。
+- **表单从 `models.list` 生成，不手写**。模型声明了 `size.enum` 才是下拉；没声明
+  就是「留空用上游默认」。`n` 没声明上限时按网关兜底 8，参考图上限未知时明确写
+  「上限未声明」。这和控制面板的三态是同一条规矩：**没声明 ≠ 0 ≠ 随便填**。
+- **异步不是甩一个 task_id 给用户**。`video.generate` 返回后页面按 `poll_after_ms`
+  自动轮询 `task.get`，时间线里显示第几次查询、等了多久；超过 5 分钟停下来，
+  保留 task_id 让人自己查。
+
+**尺寸这些能不能从提示词推？分三层看。**
+
+- **上游模型会读提示词**。写「竖版」、写「16:9」，多数图片模型会按这个构图；但这是模型行为，
+  不是协议保证 —— 同一句提示词换个渠道可能就不灵。
+- **网关不猜**。`size` / `n` / `quality` 不传就不发，绝不用「常见默认值」补上。猜错要花钱，
+  还会把「模型不支持这个尺寸」伪装成「模型没听懂」。
+- **能推的是客户端 / agent**。`models.list` 已经把 enum 给出来了，agent 把「竖版」映射成
+  `1024x1536` 是合理判断；但它必须落在声明范围内，而且属于调用方的决定，不是协议层的魔法。
+
+所以页面给建议、不替人做主：提示词里读到「竖版 / 两张 / 10 秒 / 1080p / 高清」这类高置信线索时，
+在输入框下面挂一条 `提示词线索：竖版 → 1024×1536 · 2 张`，点「应用」才写进表单；不点，一个字节都不改。
+模型声明了 `default` 就按声明预填，没声明就显示「未指定 · 上游默认」—— 不拿 enum 第一项凑数。
+
+配套的调试设施：请求 / 响应 / 时间线三个页签的报文抽屉（长 URL 只折叠显示，复制仍是原文）、
+一键复制 cURL、以及按当前端点与 Key 生成的 Claude Code / Cursor / cURL 接入配置。
+
+**预填与嵌入**。支持 aiaw 风格的 provider 参数，也支持 iframe 里 postMessage 下发：
+
+```
+/playground?provider={"type":"mcp","settings":{"baseUrl":"https://mcp.apiduo.cn/mcp",
+  "apiKey":"sk-...","compatibility":"strict"}}
+```
+
+```js
+frame.contentWindow.postMessage({ type: "mcp-playground:configure", provider }, "https://mcp.apiduo.cn")
+```
+
+嵌入到 new-api 时优先让它**同源反代** `/mcp`，页面不用改；真要走跨域，再单独给
+`/mcp` 加 CORS，并把 `frame-ancestors` 收到具体域名（当前是 `'self' https: http://localhost:*`）。
+
+密钥只写 `sessionStorage`（关标签页即失效）；端点与兼容模式写 `localStorage`。
+`compatibility=strict` 会完整执行 `initialize` 握手，失败时明确停在第一步 ——
+这正好用来验证一个「标准 MCP 客户端」能不能连上；`relaxed` 跳过握手，只在
+服务端不支持 initialize 时使用。
 
 ### 校验放两道
 
@@ -1204,11 +1311,37 @@ MCP 入口 `POST http://127.0.0.1:8080/mcp`（Streamable HTTP，无状态）；
 }
 ```
 
+### 命令行客户端 `apiduo`
+
+`packages/cli` 面向脚本与 agent：零依赖、Node 18+、**只连 `/mcp`**。
+它不复制一套参数校验 —— 模型、枚举、计费边界与 playground 同源。
+
+```bash
+npm i -g @apiduo/cli                 # 发布后
+apiduo login --endpoint https://mcp.apiduo.cn/mcp
+apiduo models --kind image
+apiduo image "一只戴宇航头盔的柴犬" --n 2 --json
+apiduo image "竖版海报，两张" --n 2 --out ./out/
+apiduo video "海浪慢镜头" --duration 5 --wait
+apiduo search "MCP 2026" --count 5
+apiduo task <task_id> --wait
+```
+
+- `--json` 时 stdout 只有一个 JSON，日志全走 stderr；退出码 0/2/3/4/5 区分成功、用法、鉴权、工具拒绝、网络超时。
+  上游 401 被包在 JSON-RPC 里返回（HTTP 200），所以鉴权是从错误文本判的，见 `packages/cli/README.md`。
+- 本地参考图 `--ref ./a.png` 会内联成 `data:image/...`，服务端只解码不联网；单张 ≤4MB、总量 ≤5MB
+  （base64 膨胀 1/3，公网入口还有 8MB 请求体上限）。
+- `--out` 把产物下载到本地：给目录时自动命名且**不覆盖**（重跑得到 `-2`），给文件名时覆盖；
+  落盘失败只提示、不改退出码（URL 已经拿到了），`--json` 里用 `save_failed` 说明原因。
+- 视频提交会立即计费，非交互环境必须 `--yes`；轮询 `task.get` 不计费。
+- 细节与开发方式见 `packages/cli/README.md`。
+
 ### 本地联调（不花钱）
 
 `testdata/mock_upstream.py` 是一个假上游，覆盖了五种协议族各自的端点：
 `/v1/models`、`/v1/images/generations`、`/v1/images/edits`（multipart）、`/v1/videos/generations`、
-`/v1/contents/generations/tasks`（含查询）、`/v1/tools/search`、`/v1/tasks/:key`。
+`/v1/contents/generations/tasks`（含查询）、`/v1/tools/search`、`/v1/tasks/:key`，
+外加 `/asset.png`（产物下载，用来验证 CLI 的 `--out`）。
 
 它对请求体是**严格校验**的：火山那条要求 `content` 数组且有 `model`，edits 那条要求真正的
 multipart 文件 part。所以「mock 通过」至少能证明形状没拼错，而不是什么都收：

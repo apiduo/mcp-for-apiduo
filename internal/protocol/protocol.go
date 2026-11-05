@@ -172,13 +172,17 @@ func EncodeMultipart(ctx context.Context, payload map[string]any, fetch Fetcher)
 	w := multipart.NewWriter(&buf)
 
 	for k, v := range payload {
-		if k == "image" {
-			continue // 单独作为文件 part 处理
+		if k == "image" || v == nil {
+			continue // image 单独作为文件 part；nil 当作「没传」
 		}
-		if s, ok := scalarString(v); ok {
-			if err := w.WriteField(k, s); err != nil {
-				return nil, "", fmt.Errorf("写表单字段 %s 失败: %w", k, err)
-			}
+		s, ok := scalarString(v)
+		if !ok {
+			// 表单只能表达标量。静默丢弃等于替调用方宣布成功：
+			// 参数没生效，只会在上游行为异常时才被发现（对计费接口尤其贵）。
+			return nil, "", fmt.Errorf("字段 %s 无法用 multipart 表达（%T），该协议族只接受标量", k, v)
+		}
+		if err := w.WriteField(k, s); err != nil {
+			return nil, "", fmt.Errorf("写表单字段 %s 失败: %w", k, err)
 		}
 	}
 

@@ -1,0 +1,3006 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>MCP Playground · 模型调试台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230071e3'/%3E%3Ccircle cx='7.5' cy='12' r='2' fill='white'/%3E%3Ccircle cx='16.5' cy='7.5' r='2' fill='white'/%3E%3Ccircle cx='16.5' cy='16.5' r='2' fill='white'/%3E%3Cpath d='M9.2 11.2 14.8 8M9.2 12.8 14.8 16' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+<style>
+/* ══════════════════════════════════════════════════════════════════════
+   MCP Playground — 面向客户的模型调试台
+   单文件、零依赖。与服务同源部署，直接对 /mcp 发 JSON-RPC。
+   设计语言沿用控制面板（Apple 流体交互）：材质分层、单一基线、动效可打断。
+   ══════════════════════════════════════════════════════════════════════ */
+:root{
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --bg:#f2f2f4;
+  --surface:#ffffff;
+  --surface-2:#fafafc;
+  --canvas:#f6f6f8;
+  --fill: rgba(120,120,128,.09);
+  --fill-2: rgba(120,120,128,.15);
+  --material: rgba(255,255,255,.76);
+  --line: rgba(0,0,0,.075);
+  --line-2: rgba(0,0,0,.13);
+  --text:#1d1d1f;
+  --text-2:#5c5c63;
+  --text-3:#8a8a92;
+  --accent:#0071e3;
+  --accent-hover:#0077ed;
+  --accent-ink:#0062c4;
+  --accent-soft: rgba(0,113,227,.085);
+  --accent-line: rgba(0,113,227,.28);
+  --ok:#0b7a3e; --ok-ink:#0a6b37; --ok-soft: rgba(48,209,88,.13); --ok-line: rgba(48,209,88,.30);
+  --warn-ink:#8a5300; --warn-soft: rgba(255,159,10,.14); --warn-line: rgba(255,159,10,.32);
+  --bad:#c12a20; --bad-ink:#b3261e; --bad-soft: rgba(255,69,58,.10); --bad-line: rgba(255,69,58,.28);
+  --img:#0064c8; --img-soft: rgba(0,113,227,.10);
+  --vid:#7a3ad8; --vid-soft: rgba(139,76,240,.10);
+  --sch:#087552; --sch-soft: rgba(10,143,106,.10);
+
+  --j-key:#3a3a3d; --j-str:#0a7a5a; --j-num:#9a5b00; --j-bool:#5b3fd6; --j-null:#a0a0a8; --j-punc:#a0a0a8;
+  --scroll: rgba(0,0,0,.22);
+  --tint-a: rgba(0,113,227,.06);
+  --tint-b: rgba(125,60,232,.05);
+
+  --sh-1: 0 0 0 .5px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.035);
+  --sh-2: 0 0 0 .5px rgba(0,0,0,.05), 0 14px 40px -18px rgba(0,0,0,.28);
+  --sh-3: 0 24px 80px -24px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.06);
+
+  --ease: cubic-bezier(.32,.72,0,1);
+  --spring: cubic-bezier(.34,1.32,.64,1);
+  --t-micro:160ms; --t-state:320ms; --t-panel:420ms;
+  --r-xl:18px; --r-lg:14px; --r-md:10px; --r-sm:7px;
+  --head-h:60px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0e0e10; --surface:#1a1a1d; --surface-2:#151517; --canvas:#131315;
+    --fill: rgba(140,140,150,.14); --fill-2: rgba(140,140,150,.22);
+    --material: rgba(24,24,27,.78);
+    --line: rgba(255,255,255,.085); --line-2: rgba(255,255,255,.16);
+    --text:#f2f2f5; --text-2:#a8a8ae; --text-3:#7e7e86;
+    --accent:#0a84ff; --accent-hover:#339dff; --accent-ink:#69b6ff;
+    --accent-soft: rgba(10,132,255,.16); --accent-line: rgba(10,132,255,.34);
+    --ok:#30d158; --ok-ink:#5fe083; --ok-soft: rgba(48,209,88,.16); --ok-line: rgba(48,209,88,.28);
+    --warn-ink:#ffc061; --warn-soft: rgba(255,159,10,.16); --warn-line: rgba(255,159,10,.30);
+    --bad:#ff6961; --bad-ink:#ff8a84; --bad-soft: rgba(255,69,58,.16); --bad-line: rgba(255,69,58,.30);
+    --img:#69b6ff; --img-soft: rgba(10,132,255,.16);
+    --vid:#b3a4ff; --vid-soft: rgba(139,76,240,.18);
+    --sch:#5fe0b0; --sch-soft: rgba(10,143,106,.18);
+    --j-key:#e8e8ec; --j-str:#6fd39a; --j-num:#f0b862; --j-bool:#b3a4ff; --j-null:#6d6d75; --j-punc:#6d6d75;
+    --scroll: rgba(255,255,255,.24);
+    --tint-a: rgba(10,132,255,.10); --tint-b: rgba(125,60,232,.10);
+    --sh-1: 0 0 0 .5px rgba(255,255,255,.06), 0 1px 2px rgba(0,0,0,.4);
+    --sh-2: 0 0 0 .5px rgba(255,255,255,.07), 0 16px 44px -18px rgba(0,0,0,.7);
+    --sh-3: 0 30px 90px -28px rgba(0,0,0,.85), 0 0 0 .5px rgba(255,255,255,.09);
+  }
+}
+/* 手动主题：只在用户主动切换后生效，默认完全跟随系统 */
+:root[data-theme="light"]{
+  --bg:#f2f2f4; --surface:#ffffff; --surface-2:#fafafc; --canvas:#f6f6f8;
+  --fill: rgba(120,120,128,.09); --fill-2: rgba(120,120,128,.15);
+  --material: rgba(255,255,255,.76); --line: rgba(0,0,0,.075); --line-2: rgba(0,0,0,.13);
+  --text:#1d1d1f; --text-2:#5c5c63; --text-3:#8a8a92;
+  --accent:#0071e3; --accent-hover:#0077ed; --accent-ink:#0062c4;
+  --accent-soft: rgba(0,113,227,.085); --accent-line: rgba(0,113,227,.28);
+  --ok:#0b7a3e; --ok-ink:#0a6b37; --ok-soft: rgba(48,209,88,.13); --ok-line: rgba(48,209,88,.30);
+  --warn-ink:#8a5300; --warn-soft: rgba(255,159,10,.14); --warn-line: rgba(255,159,10,.32);
+  --bad:#c12a20; --bad-ink:#b3261e; --bad-soft: rgba(255,69,58,.10); --bad-line: rgba(255,69,58,.28);
+  --img:#0064c8; --img-soft: rgba(0,113,227,.10);
+  --vid:#7a3ad8; --vid-soft: rgba(139,76,240,.10);
+  --sch:#087552; --sch-soft: rgba(10,143,106,.10);
+  --j-key:#3a3a3d; --j-str:#0a7a5a; --j-num:#9a5b00; --j-bool:#5b3fd6; --j-null:#a0a0a8; --j-punc:#a0a0a8;
+  --scroll: rgba(0,0,0,.22); --tint-a: rgba(0,113,227,.06); --tint-b: rgba(125,60,232,.05);
+  --sh-1: 0 0 0 .5px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.035);
+  --sh-2: 0 0 0 .5px rgba(0,0,0,.05), 0 14px 40px -18px rgba(0,0,0,.28);
+}
+:root[data-theme="dark"]{
+  --bg:#0e0e10; --surface:#1a1a1d; --surface-2:#151517; --canvas:#131315;
+  --fill: rgba(140,140,150,.14); --fill-2: rgba(140,140,150,.22);
+  --material: rgba(24,24,27,.78); --line: rgba(255,255,255,.085); --line-2: rgba(255,255,255,.16);
+  --text:#f2f2f5; --text-2:#a8a8ae; --text-3:#7e7e86;
+  --accent:#0a84ff; --accent-hover:#339dff; --accent-ink:#69b6ff;
+  --accent-soft: rgba(10,132,255,.16); --accent-line: rgba(10,132,255,.34);
+  --ok:#30d158; --ok-ink:#5fe083; --ok-soft: rgba(48,209,88,.16); --ok-line: rgba(48,209,88,.28);
+  --warn-ink:#ffc061; --warn-soft: rgba(255,159,10,.16); --warn-line: rgba(255,159,10,.30);
+  --bad:#ff6961; --bad-ink:#ff8a84; --bad-soft: rgba(255,69,58,.16); --bad-line: rgba(255,69,58,.30);
+  --img:#69b6ff; --img-soft: rgba(10,132,255,.16);
+  --vid:#b3a4ff; --vid-soft: rgba(139,76,240,.18);
+  --sch:#5fe0b0; --sch-soft: rgba(10,143,106,.18);
+  --j-key:#e8e8ec; --j-str:#6fd39a; --j-num:#f0b862; --j-bool:#b3a4ff; --j-null:#6d6d75; --j-punc:#6d6d75;
+  --scroll: rgba(255,255,255,.24); --tint-a: rgba(10,132,255,.10); --tint-b: rgba(125,60,232,.10);
+  --sh-1: 0 0 0 .5px rgba(255,255,255,.06), 0 1px 2px rgba(0,0,0,.4);
+  --sh-2: 0 0 0 .5px rgba(255,255,255,.07), 0 16px 44px -18px rgba(0,0,0,.7);
+}
+
+*,*::before,*::after{ box-sizing:border-box }
+[hidden]{ display:none !important }
+html,body{ height:100% }
+body{
+  margin:0; height:100dvh; display:flex; flex-direction:column; overflow:hidden;
+  color:var(--text);
+  font:13.5px/1.5 var(--font);
+  background-color:var(--bg);
+  background-image:
+    radial-gradient(880px 480px at 8% -12%, var(--tint-a), transparent 62%),
+    radial-gradient(760px 440px at 100% 0%, var(--tint-b), transparent 60%);
+  background-repeat:no-repeat;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+::selection{ background:var(--accent-soft) }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px }
+::-webkit-scrollbar{ width:11px; height:11px }
+::-webkit-scrollbar-thumb{ background:var(--scroll); border-radius:99px; border:3.5px solid transparent; background-clip:content-box }
+::-webkit-scrollbar-thumb:hover{ background:var(--text-3); background-clip:content-box }
+::-webkit-scrollbar-track{ background:transparent }
+@media (prefers-reduced-motion:reduce){
+  *{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important }
+}
+
+/* ── 顶栏 ─────────────────────────────────────────────────────────── */
+.topbar{
+  flex:none; height:56px; z-index:30;
+  display:flex; align-items:center; gap:12px; padding:0 18px;
+  background:var(--material);
+  -webkit-backdrop-filter:blur(22px) saturate(1.7); backdrop-filter:blur(22px) saturate(1.7);
+  border-bottom:1px solid var(--line);
+}
+.brand{ display:flex; align-items:center; gap:10px; flex:none; min-width:0 }
+.mark{
+  width:28px; height:28px; border-radius:8px; flex:none;
+  background:linear-gradient(150deg,#0a84ff,#0059c7);
+  box-shadow:0 1px 2px rgba(0,60,140,.35), inset 0 .5px 0 rgba(255,255,255,.35);
+  display:grid; place-items:center; color:#fff;
+}
+.mark svg{ width:16px; height:16px }
+.brand-t{ display:flex; align-items:baseline; gap:6px; min-width:0 }
+.brand-t b{ font-size:13.5px; font-weight:650; letter-spacing:-.01em; white-space:nowrap }
+.brand-t span{ font-size:11px; color:var(--text-3); white-space:nowrap }
+.brand-t em{ font-style:normal; font:10px/1 var(--mono); color:var(--text-3); padding:2px 5px; border-radius:5px; background:var(--fill); white-space:nowrap }
+
+.tb-mid{ display:flex; align-items:center; gap:8px; margin-left:10px; min-width:0 }
+.conn-chip{
+  display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 9px;
+  border:1px solid var(--line); border-radius:99px; background:var(--surface);
+  font-size:11.5px; color:var(--text-2); cursor:pointer; white-space:nowrap;
+  transition:background var(--t-micro), border-color var(--t-micro), color var(--t-micro);
+}
+.conn-chip:hover{ background:var(--fill); color:var(--text) }
+.conn-chip .dot{ width:6px; height:6px; border-radius:50%; background:var(--text-3); flex:none }
+.conn-chip[data-s="ok"] .dot{ background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft) }
+.conn-chip[data-s="bad"] .dot{ background:var(--bad); box-shadow:0 0 0 3px var(--bad-soft) }
+.conn-chip[data-s="demo"] .dot{ background:var(--warn-ink); box-shadow:0 0 0 3px var(--warn-soft) }
+.ep-chip{
+  font:11px/1 var(--mono); color:var(--text-3); padding:6px 8px; border-radius:6px;
+  background:var(--fill); max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.tb-right{ margin-left:auto; display:flex; align-items:center; gap:6px; flex:none }
+
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  height:32px; padding:0 12px; border-radius:9px;
+  border:1px solid var(--line-2); background:var(--surface); color:var(--text);
+  font:12.5px var(--font); font-weight:560; cursor:pointer; white-space:nowrap;
+  transition:background var(--t-micro) var(--ease), color var(--t-micro),
+             transform .18s var(--ease), box-shadow var(--t-micro), opacity var(--t-micro), border-color var(--t-micro);
+}
+.btn:hover{ background:var(--fill) }
+.btn:active{ transform:scale(.975) }
+.btn svg{ width:14px; height:14px; flex:none }
+.btn.primary{
+  border-color:transparent; background:var(--accent); color:#fff;
+  box-shadow:0 1px 2px rgba(0,60,140,.28), inset 0 .5px 0 rgba(255,255,255,.24);
+}
+.btn.primary:hover{ background:var(--accent-hover) }
+.btn.primary:disabled{ opacity:.4; box-shadow:none; cursor:not-allowed; transform:none }
+.btn.ghost{ border-color:transparent; background:none; color:var(--text-2); font-weight:500 }
+.btn.ghost:hover{ background:var(--fill); color:var(--text) }
+.btn.sm{ height:27px; padding:0 9px; font-size:11.5px; border-radius:8px }
+.btn.sm svg{ width:12px; height:12px }
+.btn.lg{ height:38px; padding:0 18px; border-radius:11px; font-size:13.5px }
+.btn.lg svg{ width:15px; height:15px }
+.btn[data-busy="1"]{ pointer-events:none }
+.btn[data-busy="1"] .lbl{ opacity:.6 }
+
+.icon-btn{
+  width:30px; height:30px; flex:none; display:grid; place-items:center;
+  border:0; border-radius:8px; background:none; color:var(--text-3); cursor:pointer;
+  transition:background var(--t-micro) var(--ease), color var(--t-micro), transform .18s var(--ease);
+}
+.icon-btn:hover{ background:var(--fill); color:var(--text) }
+.icon-btn:active{ transform:scale(.94) }
+.icon-btn svg{ width:15px; height:15px }
+
+kbd{
+  font:10.5px/1 var(--mono); color:var(--text-3); background:var(--surface);
+  border:1px solid var(--line-2); border-bottom-width:1.5px; border-radius:4px;
+  padding:2px 4px; min-width:16px; text-align:center;
+}
+
+/* ── 主体骨架 ─────────────────────────────────────────────────────── */
+.app{
+  flex:1 1 auto; min-height:0; width:100%; max-width:1760px; margin:0 auto;
+  display:grid; grid-template-columns:clamp(248px,17.4vw,300px) minmax(0,1fr);
+  gap:14px; padding:14px 18px 18px;
+}
+.panel{
+  background:var(--surface); border-radius:var(--r-xl); box-shadow:var(--sh-1);
+  display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden;
+}
+.panel.main{ background:var(--canvas) }
+.pane-h{
+  flex:none; height:var(--head-h); display:flex; align-items:center; gap:9px;
+  padding:0 13px; border-bottom:1px solid var(--line); background:var(--surface);
+}
+.pane-h h2{ margin:0; font-size:12.5px; font-weight:650; letter-spacing:-.01em }
+.pane-h .cnt{ font-size:11.5px; color:var(--text-3); font-variant-numeric:tabular-nums }
+
+/* ── 左栏 ─────────────────────────────────────────────────────────── */
+.conn-card{
+  flex:none; margin:12px 12px 10px; padding:11px 12px 10px;
+  border:1px solid var(--line); border-radius:12px; background:var(--surface-2);
+  transition:border-color var(--t-state), background var(--t-state);
+}
+.conn-card[data-s="ok"]{ border-color:var(--ok-line); background:linear-gradient(180deg,var(--ok-soft),transparent 70%),var(--surface-2) }
+.conn-card[data-s="demo"]{ border-color:var(--warn-line); background:linear-gradient(180deg,var(--warn-soft),transparent 70%),var(--surface-2) }
+.cc-top{ display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600 }
+.cc-top .dot{ width:6px; height:6px; border-radius:50%; background:var(--text-3); flex:none }
+.conn-card[data-s="ok"] .cc-top .dot{ background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft) }
+.conn-card[data-s="demo"] .cc-top .dot{ background:var(--warn-ink) }
+.cc-top .btn{ margin-left:auto }
+.cc-ep{
+  margin-top:5px; font:10.5px/1.4 var(--mono); color:var(--text-2);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.cc-meta{ margin-top:3px; display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--text-3) }
+.cc-key{ font:10px/1 var(--mono) }
+.cc-empty{ font-size:11.5px; color:var(--text-3); margin-top:4px; line-height:1.45 }
+
+.rail-tools{ flex:none; padding:0 12px 8px; display:flex; flex-direction:column; gap:8px }
+.search{
+  display:flex; align-items:center; gap:7px; height:32px; padding:0 9px;
+  border-radius:9px; background:var(--fill); border:1px solid transparent; color:var(--text-3);
+  transition:background var(--t-micro), border-color var(--t-micro), box-shadow var(--t-micro);
+}
+.search:focus-within{ background:var(--surface); border-color:var(--accent-line); box-shadow:0 0 0 3.5px var(--accent-soft) }
+.search svg{ width:13px; height:13px; flex:none }
+.search input{ flex:1; min-width:0; border:0; background:none; outline:none; padding:0; font:12.5px var(--font); color:var(--text) }
+.search input::placeholder{ color:var(--text-3) }
+.search kbd{ margin-left:auto; flex:none; background:var(--surface); opacity:.75 }
+
+.segmented{ display:flex; gap:2px; padding:2px; background:var(--fill); border-radius:9px }
+.segmented button{
+  flex:1; height:25px; padding:0 6px; border:0; border-radius:7px; background:none;
+  font:11.5px var(--font); color:var(--text-2); cursor:pointer; white-space:nowrap;
+  transition:background var(--t-micro) var(--ease), color var(--t-micro), box-shadow var(--t-micro);
+}
+.segmented button:hover{ color:var(--text) }
+.segmented button[aria-selected="true"]{
+  background:var(--surface); color:var(--text); font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.09), 0 0 0 .5px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme:dark){
+  .segmented button[aria-selected="true"]{ box-shadow:0 1px 3px rgba(0,0,0,.5), 0 0 0 .5px rgba(255,255,255,.08) }
+}
+:root[data-theme="light"] .segmented button[aria-selected="true"]{ box-shadow:0 1px 2px rgba(0,0,0,.09), 0 0 0 .5px rgba(0,0,0,.06) }
+:root[data-theme="dark"] .segmented button[aria-selected="true"]{ box-shadow:0 1px 3px rgba(0,0,0,.5), 0 0 0 .5px rgba(255,255,255,.08) }
+
+.model-list{ flex:1; min-height:0; overflow:auto; padding:0 8px 10px; overscroll-behavior:contain }
+.group-h{
+  position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:6px;
+  padding:7px 8px 5px; background:var(--surface); font-size:10.5px; color:var(--text-3);
+  letter-spacing:.03em;
+}
+.group-h .line{ flex:1; height:1px; background:var(--line) }
+.mrow{
+  width:100%; display:flex; align-items:center; gap:9px; padding:7px 9px;
+  border:0; border-radius:10px; background:none; text-align:left; cursor:pointer;
+  transition:background var(--t-micro) var(--ease), box-shadow var(--t-state), transform .18s var(--ease);
+}
+.mrow + .mrow{ margin-top:1px }
+.mrow:hover{ background:var(--fill) }
+.mrow:active{ transform:scale(.995) }
+.mrow[aria-selected="true"]{ background:var(--accent-soft); box-shadow:inset 0 0 0 .5px var(--accent-line) }
+.mrow .kdot{ width:5px; height:5px; border-radius:50%; flex:none; background:var(--text-3) }
+.mrow[data-k="image"] .kdot{ background:var(--img) }
+.mrow[data-k="video"] .kdot{ background:var(--vid) }
+.mrow[data-k="search"] .kdot{ background:var(--sch) }
+.mr-main{ min-width:0; flex:1; display:flex; flex-direction:column; gap:1px }
+.mr-main b{ font:12px/1.35 var(--mono); font-weight:560; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.mrow[aria-selected="true"] .mr-main b{ font-weight:650 }
+.mr-main span{ font-size:10.5px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.mr-badge{
+  flex:none; font:9.5px/1 var(--mono); letter-spacing:.02em; padding:4px 5px; border-radius:5px;
+  color:var(--text-3); background:var(--fill); text-transform:uppercase;
+}
+.mrow .mr-badge[data-ex="async"]{ color:var(--warn-ink); background:var(--warn-soft) }
+.mrow .mr-badge[data-ex="sync"]{ color:var(--text-2) }
+.rail-foot{
+  flex:none; border-top:1px solid var(--line); padding:9px 12px;
+  display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--text-3);
+}
+.rail-foot .btn{ margin-left:auto }
+.skel{ padding:8px 9px; display:flex; flex-direction:column; gap:6px }
+.skel i{ display:block; height:9px; border-radius:5px; background:var(--fill); animation:pulse 1.4s ease-in-out infinite }
+.skel i:nth-child(2){ width:62% }
+.skel i:nth-child(1){ height:11px }
+@keyframes pulse{ 0%,100%{opacity:.55} 50%{opacity:1} }
+.empty-list{ padding:22px 14px; text-align:center; color:var(--text-3); font-size:11.5px; line-height:1.6 }
+
+/* ── 主区 ─────────────────────────────────────────────────────────── */
+.main{ position:relative }
+.main-h{
+  flex:none; height:var(--head-h); display:flex; align-items:center; gap:10px;
+  padding:0 16px; border-bottom:1px solid var(--line); background:var(--surface);
+}
+.mh-title{ min-width:0; display:flex; flex-direction:column; gap:1px }
+.mh-title h1{
+  margin:0; font:600 14px/1.3 var(--mono); letter-spacing:-.01em;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:42vw;
+}
+.mh-title p{ margin:0; font-size:10.5px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.mh-badges{ display:flex; align-items:center; gap:5px; margin-left:2px; flex:none }
+.badge{
+  display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 7px;
+  border-radius:6px; font:10.5px/1 var(--mono); color:var(--text-2); background:var(--fill);
+  white-space:nowrap;
+}
+.badge.k-image{ color:var(--img); background:var(--img-soft) }
+.badge.k-video{ color:var(--vid); background:var(--vid-soft) }
+.badge.k-search{ color:var(--sch); background:var(--sch-soft) }
+.badge.exec{ color:var(--text-2) }
+.badge.exec[data-t="async"]{ color:var(--warn-ink); background:var(--warn-soft) }
+.mh-actions{ margin-left:auto; display:flex; align-items:center; gap:4px; flex:none }
+/* 模型按钮只在「左栏被收起」的窄屏出现；桌面用左栏列表 */
+.mh-models{ display:none }
+
+.stage{ flex:1; min-height:0; overflow:auto; padding:22px 26px 26px; scroll-behavior:smooth }
+.stage-inner{ max-width:1000px; margin:0 auto; min-height:100%; display:flex; flex-direction:column; gap:14px }
+.stage.is-empty{
+  background-image:radial-gradient(circle at 1px 1px, var(--line) 1px, transparent 0);
+  background-size:22px 22px; background-position:-1px -1px;
+}
+.stage.is-empty .stage-inner{ align-items:center; text-align:center }
+.stage.is-empty .welcome{ margin:auto 0 }
+/* 选中模型但还没跑：不是「欢迎页」，是「已就绪」——把三件影响结果的事先摆出来 */
+.ready-facts{
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin:0 auto 18px;
+  max-width:560px; border:1px solid var(--line); border-radius:12px; overflow:hidden;
+  background:var(--surface); box-shadow:var(--sh-1);
+}
+.ready-facts .rf{ padding:9px 11px; text-align:left; min-width:0 }
+.ready-facts .rf + .rf{ border-left:1px solid var(--line) }
+.ready-facts .rf span{ display:block; font-size:9.5px; color:var(--text-3); letter-spacing:.03em }
+.ready-facts .rf b{ display:block; margin-top:2px; font-size:11px; font-weight:560; color:var(--text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+@media (max-width:620px){
+  .ready-facts{ max-width:100%; }
+  .ready-facts .rf{ padding:8px 9px }
+  .ready-facts .rf b{ font-size:10px }
+}
+
+/* 欢迎 / 空态 */
+.welcome{ max-width:460px; padding:10px 0 26px }
+.welcome .orb{
+  width:74px; height:74px; margin:0 auto 18px; border-radius:22px;
+  background:radial-gradient(120% 120% at 20% 0%, rgba(255,255,255,.9), transparent 55%),
+             linear-gradient(150deg, var(--accent), #6d3cf0);
+  box-shadow:0 18px 44px -16px rgba(0,80,190,.55), inset 0 .5px 0 rgba(255,255,255,.5);
+  display:grid; place-items:center; color:#fff; position:relative;
+}
+.welcome .orb::after{
+  content:""; position:absolute; inset:-14px; border-radius:30px; z-index:-1;
+  background:radial-gradient(closest-side, var(--accent-soft), transparent);
+}
+.welcome .orb svg{ width:34px; height:34px }
+.welcome h3{ margin:0 0 6px; font-size:19px; font-weight:650; letter-spacing:-.02em }
+.welcome p{ margin:0 auto 18px; font-size:13px; color:var(--text-2); line-height:1.65; max-width:390px }
+.welcome .row{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap }
+.welcome .hintline{ margin-top:16px; font-size:11px; color:var(--text-3); display:flex; align-items:center; justify-content:center; gap:5px }
+.welcome .hintline svg{ width:12px; height:12px; opacity:.7 }
+
+/* 结果区 */
+.res-head{ display:flex; align-items:center; gap:8px; padding:2px 2px 0; flex-wrap:nowrap }
+.res-head h2{ margin:0; font-size:12.5px; font-weight:650; letter-spacing:-.01em; flex:none }
+.res-head .meta{ font-size:11px; color:var(--text-3); font-variant-numeric:tabular-nums; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.res-head .status-pill{ flex:none }
+.res-usage{
+  font:10px/1 var(--mono); color:var(--text-3); padding:3px 6px; border-radius:5px;
+  background:var(--fill); white-space:nowrap; flex:none;
+}
+@media (max-width:900px){ .res-usage{ display:none } }
+.res-head .spacer{ flex:1 }
+.status-pill{
+  display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 8px; border-radius:99px;
+  font-size:10.5px; font-weight:560; background:var(--fill); color:var(--text-2);
+}
+.status-pill.ok{ background:var(--ok-soft); color:var(--ok-ink) }
+.status-pill.warn{ background:var(--warn-soft); color:var(--warn-ink) }
+.status-pill.bad{ background:var(--bad-soft); color:var(--bad-ink) }
+.status-pill .dot{ width:5px; height:5px; border-radius:50%; background:currentColor }
+.status-pill.busy .dot{ animation:blink 1s ease-in-out infinite }
+@keyframes blink{ 0%,100%{opacity:1} 50%{opacity:.25} }
+
+.grid{ display:grid; gap:10px; grid-template-columns:repeat(2,minmax(0,1fr)); max-width:820px; --fit:min(56vh,560px) }
+.grid.one{ grid-template-columns:minmax(0,1fr); max-width:600px }
+.grid.three{ grid-template-columns:repeat(3,minmax(0,1fr)); max-width:1000px }
+.tile{
+  position:relative; margin:0; border-radius:14px; overflow:hidden; background:var(--surface-2);
+  box-shadow:var(--sh-1); cursor:zoom-in;
+  animation:tileIn .5s var(--spring) both;
+}
+.tile.wide{ aspect-ratio:16/10 }
+/* 调试台不能裁产物，也不能为了整齐把图压扁：
+   width/height 都 auto，交给 max-width / max-height 等比收缩，居中铺在哑光底上。 */
+.tile img{
+  display:block; margin:0 auto; width:auto; height:auto;
+  max-width:100%; max-height:var(--fit); object-fit:contain;
+  background:var(--surface-2);
+}
+.grid.one .tile img{ max-height:var(--fit) }
+.grid.three .tile img{ max-height:min(40vh,400px) }
+.tile:hover img{ transform:scale(1.008) }
+.tile:hover img{ transform:scale(1.015) }
+.tile-bar{
+  position:absolute; inset:auto 0 0 0; display:flex; align-items:center; gap:6px;
+  padding:26px 10px 8px; color:#fff; font-size:10.5px;
+  background:linear-gradient(transparent, rgba(0,0,0,.55));
+  opacity:0; transform:translateY(4px);
+  transition:opacity var(--t-micro) var(--ease), transform var(--t-state) var(--ease);
+}
+.tile:hover .tile-bar,.tile:focus-within .tile-bar{ opacity:1; transform:none }
+.tile-bar .sp{ flex:1 }
+.tile-bar a,.tile-bar button{
+  color:#fff; background:rgba(255,255,255,.16); border:0; border-radius:6px;
+  padding:3px 7px; font:10.5px var(--font); cursor:pointer; text-decoration:none;
+  display:inline-flex; align-items:center; gap:3px; backdrop-filter:blur(8px);
+}
+.tile-bar a:hover,.tile-bar button:hover{ background:rgba(255,255,255,.28) }
+.tile-bar svg{ width:11px; height:11px }
+.tile .fallback{
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:7px; padding:18px; color:var(--text-3); font-size:11px; text-align:center; background:var(--surface-2);
+}
+.tile .fallback code{ font:10px/1.4 var(--mono); word-break:break-all; max-height:3.6em; overflow:hidden }
+@keyframes tileIn{ from{ opacity:0; transform:scale(.975) translateY(6px) } to{ opacity:1; transform:none } }
+
+.video-wrap{ max-width:900px; border-radius:15px; overflow:hidden; background:#0b0b0d; box-shadow:var(--sh-2); position:relative }
+.video-wrap video{ display:block; width:100%; max-height:56vh; background:#0b0b0d }
+.video-poster{ position:relative; aspect-ratio:16/9; max-height:56vh; display:grid; place-items:center; overflow:hidden }
+.video-poster img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:.72; filter:saturate(.9) }
+.video-poster .play{
+  position:relative; width:56px; height:56px; border-radius:50%; display:grid; place-items:center;
+  background:rgba(255,255,255,.9); color:#111; box-shadow:0 8px 28px rgba(0,0,0,.35);
+  border:0; cursor:pointer; transition:transform .2s var(--spring), background var(--t-micro);
+}
+.video-poster .play:hover{ transform:scale(1.05); background:#fff }
+.video-poster .play:active{ transform:scale(.97) }
+.video-poster .play svg{ width:20px; height:20px; margin-left:2px }
+.video-poster .cap{
+  position:absolute; left:12px; bottom:10px; color:#fff; font-size:10.5px;
+  background:rgba(0,0,0,.42); padding:4px 7px; border-radius:5px; backdrop-filter:blur(8px);
+}
+
+.task-card{
+  max-width:700px; border:1px solid var(--line); border-radius:14px; background:var(--surface);
+  padding:14px 16px 12px; box-shadow:var(--sh-1);
+}
+.task-top{ display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+.task-top b{ font-size:12.5px }
+.task-id{ font:10.5px/1.4 var(--mono); color:var(--text-3); word-break:break-all }
+.task-timeline{ margin-top:13px; display:flex; flex-direction:column; gap:0 }
+.tl-step{ display:flex; gap:10px; min-height:34px; position:relative }
+.tl-step:not(:last-child)::before{
+  content:""; position:absolute; left:5.5px; top:14px; bottom:-2px; width:1.5px; background:var(--line-2);
+}
+.tl-step .tdot{
+  width:12px; height:12px; border-radius:50%; flex:none; margin-top:3px; z-index:1;
+  border:2px solid var(--line-2); background:var(--surface);
+}
+.tl-step.ok .tdot{ border-color:var(--ok); background:var(--ok) }
+.tl-step.run .tdot{ border-color:var(--accent); border-top-color:transparent; animation:spin .9s linear infinite }
+.tl-step.bad .tdot{ border-color:var(--bad); background:var(--bad) }
+.tl-main{ min-width:0; padding-bottom:8px }
+.tl-main b{ display:block; font-size:11.5px; font-weight:560 }
+.tl-main span{ font-size:10.5px; color:var(--text-3) }
+@keyframes spin{ to{ transform:rotate(360deg) } }
+
+.search-results{ display:flex; flex-direction:column; gap:8px; max-width:880px }
+.sr{
+  display:flex; gap:11px; padding:12px 14px; border-radius:12px; background:var(--surface);
+  box-shadow:var(--sh-1); text-decoration:none; color:inherit;
+  transition:box-shadow var(--t-state), transform .22s var(--ease);
+}
+.sr:hover{ box-shadow:var(--sh-2); transform:translateY(-1px) }
+.sr .idx{
+  flex:none; width:20px; height:20px; border-radius:6px; display:grid; place-items:center;
+  background:var(--sch-soft); color:var(--sch); font:10px var(--mono);
+}
+.sr-main{ min-width:0; flex:1 }
+.sr-main b{ display:block; font-size:12.5px; font-weight:600; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.sr-main .u{ font:10px/1.4 var(--mono); color:var(--sch); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.sr-main p{ margin:5px 0 0; font-size:11.5px; line-height:1.55; color:var(--text-2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
+.sr-main p.open{ -webkit-line-clamp:unset }
+.sr .arr{ flex:none; align-self:center; color:var(--text-3) }
+.sr .arr svg{ width:13px; height:13px }
+
+.err-card{
+  max-width:760px; border:1px solid var(--bad-line); border-radius:14px; background:
+    linear-gradient(180deg,var(--bad-soft),transparent 72%),var(--surface);
+  padding:15px 16px; box-shadow:var(--sh-1);
+}
+.err-card .et{ display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; color:var(--bad-ink) }
+.err-card .et svg{ width:15px; height:15px }
+.err-card .em{ margin:9px 0 0; font:11.5px/1.6 var(--mono); color:var(--text); word-break:break-word; white-space:pre-wrap }
+.err-card .eh{ margin:9px 0 0; font-size:11.5px; color:var(--text-2); line-height:1.6 }
+.err-card .ea{ margin-top:11px; display:flex; gap:6px }
+
+/* 加载骨架 */
+.loading-card{ border-radius:14px; background:var(--surface); box-shadow:var(--sh-1); padding:16px; display:flex; flex-direction:column; gap:10px }
+.loading-card .lc-top{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2) }
+.loading-card .lc-top .ring{ width:13px; height:13px; border-radius:50%; border:1.8px solid var(--accent-line); border-top-color:var(--accent); animation:spin .8s linear infinite }
+.sk-line{ height:12px; border-radius:6px; background:var(--fill); animation:pulse 1.5s ease-in-out infinite }
+.sk-line:nth-child(2){ width:86% } .sk-line:nth-child(3){ width:64% }
+.sk-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:2px }
+.sk-box{ aspect-ratio:1; border-radius:12px; background:var(--fill); animation:pulse 1.5s ease-in-out infinite }
+
+/* ── 输入台（底部停靠） ───────────────────────────────────────────── */
+.composer{ flex:none; border-top:1px solid var(--line); background:var(--surface); padding:13px 22px 14px }
+.composer-in{ max-width:1000px; margin:0 auto }
+.prompt-box{
+  border:1px solid var(--line-2); border-radius:14px; background:var(--surface);
+  padding:11px 13px 7px; transition:border-color var(--t-micro), box-shadow var(--t-micro), background var(--t-micro);
+}
+.prompt-box:focus-within{ border-color:var(--accent); box-shadow:0 0 0 4px var(--accent-soft) }
+.prompt-box textarea{
+  width:100%; min-height:46px; max-height:168px; resize:none; border:0; outline:none; background:none;
+  font:13.5px/1.55 var(--font); color:var(--text); padding:0; display:block;
+}
+.prompt-box textarea::placeholder{ color:var(--text-3) }
+.prompt-foot{ display:flex; align-items:center; gap:6px; margin-top:5px; min-height:22px; flex-wrap:wrap }
+.prompt-foot .ex-label{ font-size:10.5px; color:var(--text-3); flex:none; margin-right:1px }
+.ex{
+  border:0; background:var(--fill); color:var(--text-2); border-radius:6px; padding:3px 7px;
+  font:10.5px var(--font); cursor:pointer; white-space:nowrap;
+  transition:background var(--t-micro), color var(--t-micro);
+}
+.ex:hover{ background:var(--fill-2); color:var(--text) }
+.prompt-foot .sp{ flex:1 }
+.prompt-foot .count{ font:10px var(--mono); color:var(--text-3); font-variant-numeric:tabular-nums }
+
+.params{ display:flex; flex-wrap:wrap; align-items:flex-end; gap:9px; margin-top:10px }
+.params .btn.sm{ height:31px; border-radius:8px; align-self:flex-start }
+.field{ display:flex; flex-direction:column; gap:4px; min-width:0; flex:0 1 auto }
+.field > label{ font-size:10px; color:var(--text-3); display:flex; align-items:center; gap:4px; letter-spacing:.01em }
+.field > label .undeclared{ color:var(--text-3); font-size:9.5px }
+.inp,select.inp{
+  height:31px; padding:0 8px; border-radius:8px; border:1px solid var(--line-2);
+  background:var(--surface); color:var(--text); font:12px var(--font); outline:none; min-width:0;
+  transition:border-color var(--t-micro), box-shadow var(--t-micro), background var(--t-micro);
+}
+select.inp{ cursor:pointer; padding-right:22px; appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);
+  background-position:calc(100% - 12px) 13px, calc(100% - 8px) 13px; background-size:4px 4px; background-repeat:no-repeat;
+}
+.inp:hover{ border-color:var(--text-3) }
+.inp:focus{ border-color:var(--accent); box-shadow:0 0 0 3.5px var(--accent-soft) }
+.inp.mono{ font:11px var(--mono) }
+.stepper{ display:flex; align-items:center; border:1px solid var(--line-2); border-radius:8px; overflow:hidden; height:31px; background:var(--surface) }
+.stepper button{ width:26px; height:100%; border:0; background:none; color:var(--text-2); cursor:pointer; font-size:14px; line-height:1 }
+.stepper button:hover{ background:var(--fill); color:var(--text) }
+.stepper input{ width:36px; height:100%; border:0; border-inline:1px solid var(--line); background:none; text-align:center; font:11.5px var(--mono); color:var(--text); outline:none; -moz-appearance:textfield }
+.stepper input::-webkit-outer-spin-button,.stepper input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0 }
+.switch{
+  display:inline-flex; align-items:center; gap:7px; height:31px; padding:0 9px;
+  border:1px solid var(--line-2); border-radius:8px; background:var(--surface); cursor:pointer;
+  font-size:11.5px; color:var(--text-2); user-select:none;
+}
+.switch input{ position:absolute; opacity:0; pointer-events:none }
+.switch .track{ width:26px; height:15px; border-radius:99px; background:var(--fill-2); position:relative; transition:background var(--t-state) }
+.switch .track::after{ content:""; position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform var(--t-state) var(--spring) }
+.switch input:checked + .track{ background:var(--accent) }
+.switch input:checked + .track::after{ transform:translateX(11px) }
+.switch input:focus-visible + .track{ box-shadow:0 0 0 3px var(--accent-soft) }
+/* 提示词线索：只是「建议」，不点应用绝不改表单。
+   放在输入框下面而不是参数行里，是为了让「读到的」和「要填的」分开。 */
+.cues{
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:8px;
+  padding:6px 9px; border:1px solid var(--accent-line); background:var(--accent-soft);
+  border-radius:9px; font-size:11px; color:var(--accent-ink);
+  animation:chipIn .3s var(--spring) both;
+}
+.cues b{ font-weight:600; flex:none }
+.cues .cue-i{ display:grid; place-items:center; flex:none }
+.cues .cue-i svg{ width:12px; height:12px }
+.cues .cue{
+  font:10.5px/1 var(--mono); background:var(--surface); border-radius:5px;
+  padding:4px 6px; white-space:nowrap; color:var(--text-2);
+}
+.cues .cue-sep{ opacity:.4 }
+.cues .sp{ flex:1 }
+.cue-btn{
+  border:0; background:var(--accent); color:#fff; border-radius:6px;
+  padding:4px 8px; font:10.5px var(--font); cursor:pointer; white-space:nowrap;
+}
+.cue-btn.ghost{ background:none; color:var(--accent-ink); border:1px solid var(--accent-line) }
+.cue-btn:hover{ filter:brightness(1.06) }
+
+/* 参考图：没加图时不留空位（它按需出现，不该常驻占一行） */
+.refs-area{
+  display:flex; flex-direction:column; gap:5px; margin-top:9px; padding:9px 10px;
+  border:1px dashed var(--line-2); border-radius:10px; background:var(--surface-2);
+  animation:chipIn .3s var(--spring) both;
+}
+.refs-area .ra-h{ display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--text-3) }
+.refs-area .ra-h b{ color:var(--text-2); font-weight:560 }
+.refs-area .ra-h .sp{ flex:1 }
+@keyframes chipIn{ from{ opacity:0; transform:translateY(-3px) } to{ opacity:1; transform:none } }
+.refs{ display:flex; flex-direction:column; gap:4px; width:100%; max-width:620px }
+.ref-row{ display:flex; align-items:center; gap:5px }
+.ref-row .inp{ flex:1 }
+.ref-row .icon-btn{ width:26px; height:26px }
+.ref-add{ align-self:flex-start; font-size:10.5px; color:var(--accent-ink); background:none; border:0; cursor:pointer; padding:2px 0 }
+.ref-add:hover{ text-decoration:underline }
+.ref-note{ font-size:9.5px; color:var(--text-3) }
+.ref-note.warn{ color:var(--warn-ink) }
+
+.adv{ margin-top:9px }
+.adv summary{
+  display:inline-flex; align-items:center; gap:5px; font-size:10.5px; color:var(--text-3);
+  cursor:pointer; list-style:none; user-select:none; padding:2px 0;
+}
+.adv summary::-webkit-details-marker{ display:none }
+.adv summary::before{
+  content:""; width:0; height:0; border-left:4px solid currentColor; border-top:3.5px solid transparent;
+  border-bottom:3.5px solid transparent; transition:transform var(--t-state) var(--ease);
+}
+.adv[open] summary::before{ transform:rotate(90deg) }
+.adv summary:hover{ color:var(--text) }
+.adv textarea{
+  margin-top:6px; width:100%; height:72px; resize:vertical; border:1px solid var(--line-2);
+  border-radius:9px; background:var(--surface-2); padding:8px 10px;
+  font:11px/1.55 var(--mono); color:var(--text); outline:none;
+}
+.adv textarea:focus{ border-color:var(--accent); box-shadow:0 0 0 3.5px var(--accent-soft) }
+.adv .adv-hint{ margin-top:4px; font-size:10px; color:var(--text-3) }
+.adv .adv-hint.bad{ color:var(--bad) }
+
+.run-row{ display:flex; align-items:center; gap:8px; margin-top:11px }
+.run-hint{ font-size:10.5px; color:var(--text-3); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.run-hint b{ color:var(--text-2); font-weight:560 }
+.run-row .sp{ flex:1 }
+.run-btn kbd{ background:rgba(255,255,255,.16); border-color:rgba(255,255,255,.24); color:rgba(255,255,255,.86) }
+
+/* ── 抽屉 / 浮层 ──────────────────────────────────────────────────── */
+.scrim{
+  position:fixed; inset:0; z-index:38; background:rgba(0,0,0,.22);
+  opacity:0; pointer-events:none; transition:opacity var(--t-state) var(--ease);
+  -webkit-backdrop-filter:blur(1.5px); backdrop-filter:blur(1.5px);
+}
+.scrim.on{ opacity:1; pointer-events:auto }
+.drawer{
+  position:fixed; top:56px; right:0; bottom:0; z-index:39; width:min(470px,94vw);
+  display:flex; flex-direction:column; background:var(--surface);
+  border-left:1px solid var(--line); box-shadow:-20px 0 60px -28px rgba(0,0,0,.45);
+  transform:translateX(102%); transition:transform var(--t-panel) var(--ease);
+}
+.drawer.on{ transform:none }
+.dr-h{ flex:none; height:52px; display:flex; align-items:center; gap:8px; padding:0 12px 0 15px; border-bottom:1px solid var(--line) }
+.dr-h b{ font-size:12.5px }
+.dr-h .sp{ flex:1 }
+.dr-tabs{ flex:none; display:flex; gap:2px; padding:8px 12px; background:var(--surface); border-bottom:1px solid var(--line) }
+.dr-tabs button{
+  flex:1; height:27px; border:0; border-radius:7px; background:none; color:var(--text-2);
+  font:11.5px var(--font); cursor:pointer;
+}
+.dr-tabs button[aria-selected="true"]{ background:var(--fill); color:var(--text); font-weight:600 }
+.dr-body{ flex:1; min-height:0; overflow:auto; padding:12px 14px 18px }
+.dr-foot{ flex:none; border-top:1px solid var(--line); padding:9px 12px; display:flex; gap:6px; align-items:center }
+.dr-foot .hint{ font-size:10px; color:var(--text-3); margin-left:auto; text-align:right }
+
+.call-meta{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px }
+.call-meta .m{ font:10.5px var(--mono); color:var(--text-2); background:var(--fill); padding:3px 6px; border-radius:5px }
+pre.json{
+  margin:0; padding:11px 12px; border-radius:10px; background:var(--surface-2);
+  border:1px solid var(--line); font:10.5px/1.6 var(--mono); color:var(--text);
+  overflow:auto; max-height:calc(100vh - 260px); white-space:pre-wrap; word-break:break-word;
+}
+.j-key{ color:var(--j-key); font-weight:600 } .j-str{ color:var(--j-str) } .j-num{ color:var(--j-num) }
+.j-bool{ color:var(--j-bool) } .j-null{ color:var(--j-null) } .j-punc{ color:var(--j-punc) }
+.tl-list{ display:flex; flex-direction:column; gap:3px }
+.tl-row{
+  display:grid; grid-template-columns:52px 1fr auto; gap:8px; align-items:center;
+  padding:6px 8px; border-radius:7px; border:0; background:none; cursor:pointer; text-align:left;
+  font:10.5px var(--mono); color:var(--text-2);
+  transition:background var(--t-micro);
+}
+.tl-row:hover{ background:var(--fill) }
+.tl-row[aria-selected="true"]{ background:var(--accent-soft); color:var(--text) }
+.tl-row .t{ color:var(--text-3) }
+.tl-row .s{ font-weight:600; color:var(--ok-ink) }
+.tl-row .s.bad{ color:var(--bad-ink) }
+.tl-row .ms{ color:var(--text-3); text-align:right }
+.dr-empty{ padding:30px 16px; text-align:center; color:var(--text-3); font-size:11.5px; line-height:1.7 }
+
+/* 弹层 */
+.sheet{ position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:20px }
+.sheet .scrim{ z-index:0 }
+.sheet-card{
+  position:relative; z-index:1; width:min(560px,96vw); max-height:88vh; overflow:auto;
+  background:var(--surface); border-radius:20px; box-shadow:var(--sh-3);
+  transform:translateY(10px) scale(.985); opacity:0;
+  transition:transform var(--t-panel) var(--ease), opacity var(--t-state) var(--ease);
+}
+.sheet.on .sheet-card{ transform:none; opacity:1 }
+.sh-h{ display:flex; align-items:flex-start; gap:10px; padding:19px 20px 0 }
+.sh-h .sh-i{
+  width:34px; height:34px; border-radius:10px; flex:none; display:grid; place-items:center;
+  background:var(--accent-soft); color:var(--accent-ink);
+}
+.sh-h .sh-i svg{ width:17px; height:17px }
+.sh-h h3{ margin:0; font-size:15.5px; font-weight:650; letter-spacing:-.02em }
+.sh-h p{ margin:3px 0 0; font-size:11.5px; color:var(--text-3); line-height:1.55 }
+.sh-h .icon-btn{ margin-left:auto; flex:none }
+.sh-b{ padding:15px 20px 4px; display:flex; flex-direction:column; gap:12px }
+.sh-f{ display:flex; align-items:center; gap:8px; padding:14px 20px 18px }
+.sh-f .sp{ flex:1 }
+
+.form-row{ display:flex; flex-direction:column; gap:5px }
+.form-row > label{ font-size:11px; color:var(--text-2); font-weight:560; display:flex; align-items:center; gap:5px }
+.form-row > label .opt{ font-size:10px; color:var(--text-3); font-weight:400 }
+.form-row .inp{ height:36px; border-radius:10px; font-size:12.5px }
+.form-row .with-btn{ display:flex; gap:6px }
+.form-row .with-btn .inp{ flex:1 }
+.form-note{ font-size:10.5px; color:var(--text-3); line-height:1.55 }
+.form-note.warn{ color:var(--warn-ink) }
+.seg-line{ display:flex; align-items:center; gap:8px }
+.seg-line .segmented{ flex:1 }
+
+.hs{ border:1px solid var(--line); border-radius:11px; overflow:hidden; background:var(--surface-2) }
+.hs-row{ display:flex; align-items:center; gap:8px; padding:8px 10px; font-size:11px }
+.hs-row + .hs-row{ border-top:1px solid var(--line) }
+.hs-row .hdot{ width:14px; height:14px; flex:none; display:grid; place-items:center; color:var(--text-3) }
+.hs-row .hdot svg{ width:13px; height:13px }
+.hs-row[data-s="run"] .hdot svg{ animation:spin .9s linear infinite }
+.hs-row[data-s="ok"] .hdot{ color:var(--ok) }
+.hs-row[data-s="bad"] .hdot{ color:var(--bad) }
+.hs-row b{ font:10.5px var(--mono); font-weight:560; flex:none }
+.hs-row span{ color:var(--text-3); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.hs-row .ms{ margin-left:auto; font:9.5px var(--mono); color:var(--text-3); flex:none }
+
+.tabs{ display:flex; gap:2px; padding:2px; border-radius:9px; background:var(--fill); overflow:auto; scrollbar-width:none }
+.tabs::-webkit-scrollbar{ display:none }
+.tabs button{
+  flex:1 1 auto; min-width:max-content; height:26px; padding:0 9px; border:0; border-radius:7px;
+  background:none; color:var(--text-2); font:11.5px var(--font); cursor:pointer; white-space:nowrap;
+}
+.tabs button[aria-selected="true"]{ background:var(--surface); color:var(--text); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08) }
+pre.cfg{
+  margin:0; padding:12px 13px; border-radius:11px; background:var(--surface-2);
+  border:1px solid var(--line); font:10.5px/1.7 var(--mono); color:var(--text);
+  overflow:auto; max-height:44vh; white-space:pre-wrap; word-break:break-word;
+}
+
+.toast{
+  position:fixed; left:50%; top:64px; z-index:80; transform:translate(-50%,-8px);
+  display:flex; align-items:center; gap:7px; max-width:min(520px,92vw);
+  padding:9px 13px; border-radius:10px; background:var(--text); color:var(--surface);
+  font-size:12px; box-shadow:0 12px 40px -10px rgba(0,0,0,.5);
+  opacity:0; pointer-events:none; transition:opacity var(--t-state), transform var(--t-panel) var(--spring);
+}
+.toast.on{ opacity:1; transform:translate(-50%,0) }
+.toast svg{ width:14px; height:14px; flex:none }
+.toast.bad{ background:var(--bad); color:#fff }
+.toast.ok{ background:var(--ok); color:#fff }
+
+/* 灯箱 */
+.lightbox{
+  position:fixed; inset:0; z-index:70; display:grid; place-items:center; padding:24px;
+  background:rgba(10,10,12,.86); backdrop-filter:blur(8px); opacity:0; pointer-events:none;
+  transition:opacity var(--t-state);
+}
+.lightbox.on{ opacity:1; pointer-events:auto }
+.lightbox img{ max-width:94vw; max-height:88vh; border-radius:12px; box-shadow:0 30px 90px rgba(0,0,0,.6) }
+.lightbox .icon-btn{ position:absolute; top:16px; right:16px; color:rgba(255,255,255,.8); background:rgba(255,255,255,.1) }
+
+/* 提示条（演示 / 错误） */
+.notice{
+  flex:none; display:flex; align-items:center; gap:8px; padding:7px 20px;
+  font-size:11.5px; background:var(--warn-soft); color:var(--warn-ink);
+  border-bottom:1px solid var(--warn-line);
+}
+.notice svg{ width:13px; height:13px; flex:none }
+.nt-short{ display:none }
+@media (max-width:620px){
+  .notice{ padding:6px 12px; font-size:11px; gap:6px }
+  .nt-long{ display:none } .nt-short{ display:inline }
+  .notice .btn{ height:22px; padding:0 7px; font-size:10px }
+}
+.notice .btn{ margin-left:auto; height:24px; padding:0 8px; font-size:10.5px; background:transparent; border-color:currentColor; color:inherit }
+
+/* ── 响应式 ───────────────────────────────────────────────────────── */
+@media (max-width:1240px){
+  .app{ grid-template-columns:240px minmax(0,1fr); gap:12px; padding:12px 14px 14px }
+  .ep-chip{ max-width:220px }
+  .stage{ padding:20px 20px 22px }
+  .composer{ padding:12px 18px 13px }
+}
+@media (max-width:1080px){
+  .brand-t span,.brand-t em{ display:none }
+  .ep-chip{ display:none }
+  .stage-inner{ max-width:100% }
+}
+@media (max-width:900px){
+  .topbar{ height:52px; padding:0 12px; gap:8px }
+  .brand-t b{ font-size:12.5px }
+  /* 窄屏不要「上下两块各自滚动」：左栏整块收进弹层，主区拿回全部高度 */
+  .app{ grid-template-columns:minmax(0,1fr); gap:10px; padding:10px 10px 12px }
+  .panel.rail{ display:none }
+  .mh-models{ display:grid }
+  .main-h{ height:52px; padding:0 10px; gap:8px }
+  .mh-title h1{ max-width:50vw; font-size:12.5px }
+  .mh-badges{ display:none }
+  .stage{ padding:15px 13px 18px }
+  .composer{ padding:10px 12px 12px }
+  .drawer{ top:52px }
+  .grid.three{ grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .models-card{
+    width:min(560px,96vw); height:min(78vh,720px); overflow:hidden;
+    display:flex; flex-direction:column;
+  }
+  .models-card .ms-tools{ flex:none; padding:12px 14px 8px; display:flex; flex-direction:column; gap:8px }
+  .models-card #modelListMobile{ flex:1; min-height:0; overflow:auto; padding:0 8px 10px }
+}
+@media (max-width:620px){
+  .res-head #resAgain{ display:none }
+  .tb-right .btn .lbl{ display:none }
+  .tb-right .btn{ width:32px; padding:0 }
+  .tb-right .btn svg{ width:15px; height:15px }
+  .mh-actions .btn .lbl{ display:none }
+  .mh-actions .btn{ width:30px; padding:0 }
+  .prompt-foot .ex-label{ display:none }
+  .ex:nth-child(n+3){ display:none }
+  .field{ flex:1 1 44% }
+  .field.wide{ flex:1 1 100% }
+  .welcome h3{ font-size:17px }
+  .welcome .orb{ width:60px; height:60px; border-radius:18px; margin-bottom:14px }
+  .welcome .orb svg{ width:28px; height:28px }
+  .grid,.grid.three{ grid-template-columns:minmax(0,1fr) }
+  .tile.wide{ aspect-ratio:3/2 }
+  .drawer{ width:100% }
+  .sheet{ padding:10px }
+  .sh-b{ padding:13px 16px 4px }
+  .sh-h{ padding:16px 16px 0 }
+  .sh-f{ padding:12px 16px 15px }
+  .run-hint{ display:none }
+  .run-row .btn.lg{ width:100% }
+}
+@media (max-width:400px){
+  .brand-t b{ display:none }
+  .field{ flex:1 1 46% }
+  .field.wide{ flex:1 1 100% }
+  .params{ gap:8px }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none"><circle cx="7" cy="12" r="2.1" fill="currentColor"/><circle cx="16.5" cy="7" r="2.1" fill="currentColor"/><circle cx="16.5" cy="17" r="2.1" fill="currentColor"/><path d="M8.8 10.9 14.7 7.9M8.8 13.1 14.7 16.1" stroke="currentColor" stroke-width="1.5"/></svg>
+    </div>
+    <div class="brand-t"><b>MCP Playground</b><span>模型调试台</span><em>beta</em></div>
+  </div>
+  <div class="tb-mid">
+    <button class="conn-chip" id="connChip" data-s="none" title="连接设置"><i class="dot"></i><span id="connText">未连接</span></button>
+    <span class="ep-chip" id="epChip">—</span>
+  </div>
+  <div class="tb-right">
+    <button class="btn ghost" id="btnDemo" title="用内置数据体验界面"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="3.2"/></svg><span class="lbl">演示</span></button>
+    <button class="btn" id="btnEmbed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg><span class="lbl">接入配置</span></button>
+    <button class="icon-btn" id="btnTheme" title="外观：跟随系统"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M5.2 18.8l1.4-1.4M17.4 6.6l1.4-1.4"/></svg></button>
+  </div>
+</header>
+
+<div class="notice" id="notice" hidden>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 2.8 19h18.4L12 3Z"/><path d="M12 9v5M12 17v.5"/></svg>
+  <span id="noticeText"><span class="nt-long">演示模式：界面与交互是真的，数据是内置样例。连接服务后可看到你自己的模型与产物。</span><span class="nt-short">演示模式 · 数据为内置样例</span></span>
+  <button class="btn" id="btnLeaveDemo">连接服务</button>
+</div>
+
+<div class="app">
+  <aside class="panel rail">
+    <div class="pane-h">
+      <h2>连接</h2><span class="cnt" id="railCnt"></span>
+    </div>
+    <div class="conn-card" id="connCard" data-s="none">
+      <div class="cc-top"><i class="dot"></i><span id="ccTitle">尚未连接</span><button class="btn sm" id="btnCfg">设置</button></div>
+      <div class="cc-ep" id="ccEp">没有可用的 MCP 端点</div>
+      <div class="cc-empty" id="ccEmpty">填入端点与密钥后，这里会显示服务版本、可用工具数与模型数。</div>
+      <div class="cc-meta" id="ccMeta" hidden><span class="cc-key" id="ccKey"></span><span>·</span><span id="ccMode"></span></div>
+    </div>
+
+    <div class="rail-tools">
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/></svg>
+        <input id="q" placeholder="搜索模型" autocomplete="off" spellcheck="false">
+        <kbd>⌘K</kbd>
+      </label>
+      <div class="segmented" id="kindTabs" role="tablist">
+        <button role="tab" data-k="" aria-selected="true">全部</button>
+        <button role="tab" data-k="image" aria-selected="false">图片</button>
+        <button role="tab" data-k="video" aria-selected="false">视频</button>
+        <button role="tab" data-k="search" aria-selected="false">检索</button>
+      </div>
+    </div>
+
+    <div class="model-list" id="modelList">
+      <div class="skel"><i></i><i></i></div>
+      <div class="skel"><i></i><i></i></div>
+      <div class="skel"><i></i><i></i></div>
+    </div>
+
+    <div class="rail-foot">
+      <span id="footText">未加载模型</span>
+      <button class="icon-btn" id="btnReload" title="重新拉取模型"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+    </div>
+  </aside>
+
+  <section class="panel main">
+    <div class="main-h">
+      <button class="icon-btn mh-models" id="btnModels" title="切换模型">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
+    </button>
+    <div class="mh-title">
+        <h1 id="mName">未选择模型</h1>
+        <p id="mSub">从左侧选一个模型，或先连接服务</p>
+      </div>
+      <div class="mh-badges" id="mBadges"></div>
+      <div class="mh-actions">
+        <button class="btn ghost sm" id="btnModelJson" title="查看该模型的完整画像"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></svg><span class="lbl">画像</span></button>
+        <button class="btn ghost sm" id="btnRaw" title="查看上一次请求与响应"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9h17M7 6.6h.01M10 6.6h.01"/></svg><span class="lbl">报文</span></button>
+      </div>
+    </div>
+
+    <div class="stage is-empty" id="stage">
+      <div class="stage-inner" id="stageInner"></div>
+    </div>
+
+    <div class="composer" id="composer" hidden>
+      <div class="composer-in">
+        <div class="prompt-box">
+          <textarea id="prompt" rows="1" placeholder="描述你想要的画面…" spellcheck="false"></textarea>
+          <div class="prompt-foot" id="examples"></div>
+        </div>
+        <div class="cues" id="cues" hidden></div>
+        <div class="refs-area" id="refsArea" hidden></div>
+        <div class="params" id="params"></div>
+        <details class="adv" id="adv">
+          <summary>高级参数 · 额外字段（JSON）</summary>
+          <textarea id="advJson" placeholder='{"seed": 42}' spellcheck="false"></textarea>
+          <div class="adv-hint" id="advHint">只会合并进 <code>extra</code>；键必须是该模型声明过的参数。</div>
+        </details>
+        <div class="run-row">
+          <div class="run-hint" id="runHint"></div>
+          <div class="sp"></div>
+          <button class="btn primary lg run-btn" id="btnRun">
+            <span class="spin" id="runSpin" hidden></span>
+            <svg id="runIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M8 5.2v13.6L19 12 8 5.2Z" fill="currentColor" stroke="none"/></svg>
+            <span class="lbl">运行</span>
+            <kbd>⌘</kbd><kbd>↵</kbd>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="dr-h">
+    <b>报文</b>
+    <span class="badge" id="drBadge" hidden></span>
+    <span class="sp"></span>
+    <button class="icon-btn" id="drClose" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="dr-tabs" id="drTabs" role="tablist">
+    <button role="tab" data-t="req" aria-selected="true">请求</button>
+    <button role="tab" data-t="res" aria-selected="false">响应</button>
+    <button role="tab" data-t="tl" aria-selected="false">时间线</button>
+  </div>
+  <div class="dr-body" id="drBody"></div>
+  <div class="dr-foot">
+    <button class="btn sm" id="btnCopyBody"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>复制 JSON</button>
+    <button class="btn sm" id="btnCopyCurl">复制 cURL</button>
+    <span class="hint" id="drHint">与真实客户端使用同一个端点</span>
+  </div>
+</aside>
+
+<div class="sheet" id="sheetCfg" hidden>
+  <div class="scrim" data-close></div>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="cfgTitle">
+    <div class="sh-h">
+      <div class="sh-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 7V3M15 7V3M8 7h8a2 2 0 0 1 2 2v3a6 6 0 0 1-12 0V9a2 2 0 0 1 2-2Z"/><path d="M12 18v3"/></svg></div>
+      <div><h3 id="cfgTitle">连接服务</h3><p>端点与密钥只用于当前标签页；关闭页面即失效。</p></div>
+      <button class="icon-btn" data-close title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="sh-b">
+      <div class="form-row">
+        <label for="cfgEp">MCP 端点 <span class="opt">POST · Streamable HTTP</span></label>
+        <input class="inp mono" id="cfgEp" placeholder="https://mcp.apiduo.cn/mcp" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="form-row">
+        <label for="cfgKey">API Key <span class="opt">Bearer</span></label>
+        <div class="with-btn">
+          <input class="inp mono" id="cfgKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
+          <button class="btn" id="btnEye" title="显示/隐藏">显示</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>兼容性</label>
+        <div class="seg-line">
+          <div class="segmented" id="cfgCompat">
+            <button data-v="strict" aria-selected="true">严格</button>
+            <button data-v="relaxed" aria-selected="false">宽松</button>
+          </div>
+        </div>
+        <div class="form-note" id="compatNote">严格模式先执行 <code>initialize</code> 握手，再列工具与模型；握手失败会明确停在第一步。</div>
+      </div>
+      <div class="hs" id="hs" hidden></div>
+      <div class="form-note" id="cfgErr" hidden></div>
+    </div>
+    <div class="sh-f">
+      <span class="form-note" style="flex:1">也支持 <code>?provider={...}</code> 预填，便于从 new-api 跳转。</span>
+      <button class="btn" data-close>取消</button>
+      <button class="btn primary" id="btnConnect">测试连接</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="sheetModels" hidden>
+  <div class="scrim" data-close></div>
+  <div class="sheet-card models-card" role="dialog" aria-modal="true" aria-labelledby="modelsTitle">
+    <div class="sh-h">
+      <div class="sh-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg></div>
+      <div><h3 id="modelsTitle">选择模型</h3><p id="msSub">当前 Key 可用的图片、视频与检索模型</p></div>
+      <button class="icon-btn" data-close title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="ms-tools">
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/></svg>
+        <input id="qMobile" placeholder="搜索模型" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="segmented" id="kindTabsMobile" role="tablist">
+        <button role="tab" data-k="" aria-selected="true">全部</button>
+        <button role="tab" data-k="image" aria-selected="false">图片</button>
+        <button role="tab" data-k="video" aria-selected="false">视频</button>
+        <button role="tab" data-k="search" aria-selected="false">检索</button>
+      </div>
+    </div>
+    <div class="model-list" id="modelListMobile"></div>
+  </div>
+</div>
+
+<div class="sheet" id="sheetEmbed" hidden>
+  <div class="scrim" data-close></div>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="embedTitle">
+    <div class="sh-h">
+      <div class="sh-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></div>
+      <div><h3 id="embedTitle">接入到你的客户端</h3><p>下面的配置与页面里跑的是同一条路径，复制即可用。</p></div>
+      <button class="icon-btn" data-close title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="sh-b">
+      <div class="tabs" id="embedTabs" role="tablist">
+        <button role="tab" data-t="claude" aria-selected="true">Claude Code</button>
+        <button role="tab" data-t="cursor" aria-selected="false">Cursor / Desktop</button>
+        <button role="tab" data-t="curl" aria-selected="false">cURL</button>
+        <button role="tab" data-t="provider" aria-selected="false">嵌入参数</button>
+      </div>
+      <pre class="cfg" id="embedCode"></pre>
+      <div class="form-note" id="embedNote"></div>
+    </div>
+    <div class="sh-f">
+      <span class="form-note" style="flex:1">视频类是异步的：拿到 <code>task_id</code> 后用 <code>task.get</code> 轮询。</span>
+      <button class="btn" data-close>关闭</button>
+      <button class="btn primary" id="btnCopyEmbed">复制</button>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <button class="icon-btn" id="lbClose" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <img id="lbImg" alt="产物预览">
+</div>
+
+<div class="toast" id="toast"><span id="toastText"></span></div>
+
+<script>
+"use strict";
+/* ══════════════════════════════════════════════════════════════════════
+   0. 基础工具
+   ══════════════════════════════════════════════════════════════════════ */
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => (
+  { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]
+));
+const fmtMs = ms => ms == null ? "—" : (ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + " s");
+const clock = () => new Date().toLocaleTimeString("zh-CN", { hour12: false });
+const maskKey = k => !k ? "—" : (k.length <= 10 ? "••••••" : k.slice(0, 5) + "••••••" + k.slice(-4));
+const num = v => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+
+const ICON = {
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  spin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 2.8 19h18.4L12 3Z"/><path d="M12 9v5M12 17v.6"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.4"/></svg>',
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2v13.6L19 12 8 5.2Z"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>',
+  img: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 4.6-4.6a2 2 0 0 1 2.8 0L16 17"/></svg>',
+  vid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>'
+};
+
+function toast(msg, kind) {
+  const t = $("#toast");
+  $("#toastText").textContent = msg;
+  t.className = "toast on" + (kind ? " " + kind : "");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = "toast" + (kind ? " " + kind : ""); }, 2600);
+}
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch {}
+    ta.remove();
+  }
+  toast("已复制", "ok");
+}
+
+function displayable(v) {
+  if (typeof v === "string" && v.length > 180) {
+    // 签名 URL / data URI 会把整块 JSON 撑成一条河，看不清结构。
+    // 只折叠显示，复制与请求本身都不受影响。
+    if (v.startsWith("data:")) return v.slice(0, 34) + "… (" + v.length + " chars)";
+    if (/^https?:\/\//.test(v)) return v.slice(0, 96) + "… (" + v.length + " chars)";
+    return v.slice(0, 118) + "… (" + v.length + " chars)";
+  }
+  if (Array.isArray(v)) return v.map(displayable);
+  if (v && typeof v === "object") {
+    const o = {};
+    for (const k of Object.keys(v)) o[k] = displayable(v[k]);
+    return o;
+  }
+  return v;
+}
+
+function hl(obj) {
+  const s = esc(JSON.stringify(displayable(obj), null, 2));
+  return s.replace(/("(?:[^"\\]|\\.)*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
+    let c = "num";
+    if (/^"/.test(m)) c = /:$/.test(m) ? "key" : "str";
+    else if (/true|false/.test(m)) c = "bool";
+    else if (/null/.test(m)) c = "null";
+    return '<span class="j-' + c + '">' + m + "</span>";
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   1. 状态
+   ══════════════════════════════════════════════════════════════════════ */
+const LS_EP = "mcp.pg.endpoint", LS_COMPAT = "mcp.pg.compat", LS_THEME = "mcp.pg.theme";
+const SS_KEY = "mcp.pg.key";
+
+const S = {
+  endpoint: "",
+  key: "",
+  compat: "strict",
+  server: null,
+  tools: [],
+  models: [],
+  kind: "all",
+  q: "",
+  cur: null,
+  form: { refs: [] },
+  extraVals: {},
+  running: false,
+  runId: 0,
+  cueDismissed: "",
+  calls: [],
+  seq: 0,
+  selectedCall: null,
+  task: null,
+  pollTimer: null,
+  tickTimer: null,
+  demo: false,
+  connected: false
+};
+
+function defaultEndpoint() {
+  if (location.protocol === "file:") return "https://mcp.apiduo.cn/mcp";
+  return location.origin + "/mcp";
+}
+
+function loadPrefs() {
+  S.endpoint = localStorage.getItem(LS_EP) || defaultEndpoint();
+  S.compat = localStorage.getItem(LS_COMPAT) || "strict";
+  S.key = sessionStorage.getItem(SS_KEY) || "";
+  const th = localStorage.getItem(LS_THEME);
+  if (th === "light" || th === "dark") document.documentElement.dataset.theme = th;
+}
+
+function savePrefs() {
+  localStorage.setItem(LS_EP, S.endpoint);
+  localStorage.setItem(LS_COMPAT, S.compat);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   2. 传输层：JSON-RPC over Streamable HTTP
+   ══════════════════════════════════════════════════════════════════════ */
+class RpcError extends Error {
+  constructor(kind, message, hint, detail) {
+    super(message);
+    this.kind = kind; this.hint = hint; this.detail = detail;
+  }
+}
+
+let rpcId = 0;
+
+function parseBody(text, ct) {
+  if (!text) return null;
+  const type = (ct || "").toLowerCase();
+  if (type.includes("text/event-stream") || /^\s*(?:event|data):/m.test(text)) {
+    let last = null;
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const chunk = line.slice(5).trim();
+      if (!chunk || chunk === "[DONE]") continue;
+      try { last = JSON.parse(chunk); } catch {}
+    }
+    return last;
+  }
+  try { return JSON.parse(text); }
+  catch { return { __raw: text }; }
+}
+
+async function rpc(method, params, opts = {}) {
+  if (!S.endpoint) throw new RpcError("config", "还没有配置端点", "点顶部的连接状态，填入 MCP 端点与 Key");
+  if (!S.key) throw new RpcError("config", "还没有配置 API Key", "点顶部的连接状态，填入 Bearer Key");
+
+  const id = ++rpcId;
+  const body = { jsonrpc: "2.0", id, method };
+  if (params !== undefined) body.params = params;
+
+  const t0 = performance.now();
+  let res, text = "", ct = "";
+  try {
+    res = await fetch(S.endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer " + S.key
+      },
+      body: JSON.stringify(body),
+      mode: "cors",
+      cache: "no-store"
+    });
+    ct = res.headers.get("content-type") || "";
+    text = await res.text();
+  } catch (e) {
+    const ms = performance.now() - t0;
+    record({ id, method, status: 0, ok: false, ms, req: body, res: { error: String(e && e.message || e) }, bytes: 0 });
+    throw new RpcError("network", "请求没有发出去（网络或跨域被拒）",
+      "确认端点可访问、证书有效；跨域部署时服务端需要放行 Origin。", String(e && e.message || e));
+  }
+
+  const ms = performance.now() - t0;
+  const data = parseBody(text, ct);
+  const ok = res.ok && data && !data.error;
+  record({ id, method, status: res.status, ok, ms, req: body, res: data || { __raw: text.slice(0, 4000) }, bytes: text.length, ct });
+
+  if (data && data.__raw !== undefined && !res.ok) {
+    throw new RpcError("http", "HTTP " + res.status + " · " + String(data.__raw).slice(0, 200),
+      "端点可能不是 MCP 服务，或路径写错了（通常以 /mcp 结尾）。");
+  }
+  if (!res.ok) {
+    const msg = data && data.error && (data.error.message || data.error) || ("HTTP " + res.status);
+    throw new RpcError("http", typeof msg === "string" ? msg : JSON.stringify(msg),
+      res.status === 401 ? "Key 无效，或与当前环境不匹配。" : "检查端点、Key 与网关日志。");
+  }
+  if (!data) throw new RpcError("protocol", "响应为空", "服务返回了 0 字节。");
+  if (data.error) {
+    throw new RpcError("jsonrpc", data.error.message || "JSON-RPC 错误",
+      data.error.code === -32601 ? "服务没有这个方法，确认是 MCP 端点。" : "错误码 " + data.error.code, data.error);
+  }
+  return data.result;
+}
+
+function record(call) {
+  S.seq += 1;
+  call.seq = S.seq;
+  call.at = clock();
+  call.tool = call.req && call.req.params && call.req.params.name || "";
+  S.calls.push(call);
+  if (S.calls.length > 60) S.calls.shift();
+  S.selectedCall = call;
+  if (isDrawerOpen() && activeTab() === "tl") renderInspector();
+}
+
+async function callTool(name, args) {
+  const r = await rpc("tools/call", { name, arguments: args });
+  if (!r) throw new RpcError("protocol", "工具没有返回结果", "");
+  if (r.isError) {
+    const txt = (r.content || []).filter(c => c.type === "text").map(c => c.text).join("\n");
+    throw new RpcError("tool", txt || "工具返回了错误", toolHint(txt));
+  }
+  const sc = r.structuredContent || {};
+  // 同步工具也可能只给 content：尽量从文本里还原不了就原样带着，至少不丢。
+  if (!Object.keys(sc).length && r.content) {
+    sc.__content = r.content;
+  }
+  return sc;
+}
+
+function toolHint(msg) {
+  const m = String(msg || "");
+  if (/prompt|query.*为空/.test(m)) return "入参为空：先填写提示词/检索词。";
+  if (/未声明\s*\w*\s*的上限|单次最多/.test(m)) return "模型没声明批量上限，网关按 8 兜底：把 n 调小，或分多次调用。";
+  if (/未声明参数/.test(m)) return "这个参数不在模型画像里：去控制面板声明它，或从「高级参数」里删掉。";
+  if (/不支持/.test(m)) return "模型明确声明了不支持这个能力（例如参考图上限为 0）。";
+  if (/不在可用列表|产物类型/.test(m)) return "模型不可用或类型不匹配：刷新模型列表再选。";
+  if (/task_id/.test(m)) return "task_id 无效：换过 Key 或已过期，重新提交任务。";
+  if (/key|unauthor|401/i.test(m)) return "Key 被上游拒绝，检查渠道与额度。";
+  return "";
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   3. 连接与模型
+   ══════════════════════════════════════════════════════════════════════ */
+function kindOf(m) { return m && m.kind ? m.kind : ""; }
+function kindName(k) { return { image: "图片", video: "视频", search: "检索" }[k] || k; }
+function execOf(m) {
+  const ex = (m && m.execution) || {};
+  return { task: ex.task || "", transport: ex.transport || "" };
+}
+function maxRefs(m) {
+  const v = m && m.input && m.input.max_reference_images;
+  return typeof v === "number" ? v : null;
+}
+function paramsOf(m) { return (m && m.parameters) || {}; }
+function specOf(m, k) {
+  const v = paramsOf(m)[k];
+  return v && typeof v === "object" ? v : null;
+}
+
+function setConnState(state, text) {
+  const chip = $("#connChip");
+  chip.dataset.s = state;
+  $("#connText").textContent = text;
+  const card = $("#connCard");
+  card.dataset.s = state;
+  $("#ccTitle").textContent = text;
+  $("#ccEp").textContent = S.demo ? "内置样例 · 不发出任何请求" : (S.endpoint || "没有可用的 MCP 端点");
+  const has = state === "ok" || state === "demo";
+  $("#ccEmpty").hidden = has;
+  $("#ccMeta").hidden = !has;
+  $("#epChip").textContent = S.demo ? "内置演示 · 不联网" : (S.endpoint || "—");
+  if (has) {
+    // 演示模式别把「演示」说三遍：标题已经写了，这里给数量
+    $("#ccKey").textContent = S.demo ? S.models.length + " 个模型" : maskKey(S.key);
+    $("#ccMode").textContent = S.demo ? S.tools.length + " 个工具" : (S.compat === "strict" ? "严格模式" : "宽松模式");
+  }
+  $("#railCnt").textContent = S.tools.length ? S.tools.length + " 个工具" : "";
+}
+
+function connFacts() {
+  const by = { image: 0, video: 0, search: 0 };
+  for (const m of S.models) if (by[kindOf(m)] !== undefined) by[kindOf(m)]++;
+  return by;
+}
+
+async function connect(opts = {}) {
+  const sheet = $("#sheetCfg");
+  const ep = ($("#cfgEp").value || S.endpoint).trim();
+  const key = ($("#cfgKey").value || S.key).trim();
+  const compat = $("#cfgCompat [aria-selected=true]")?.dataset.v || S.compat;
+  const errBox = $("#cfgErr");
+  errBox.hidden = true;
+
+  if (!/^https?:\/\//i.test(ep)) return cfgError("端点需要以 http:// 或 https:// 开头");
+  if (!key) return cfgError("请填写 API Key");
+
+  S.endpoint = ep; S.key = key; S.compat = compat; S.demo = false;
+  savePrefs();
+  sessionStorage.setItem(SS_KEY, key);
+  $("#notice").hidden = true;
+
+  const hs = $("#hs");
+  hs.hidden = false;
+  hs.innerHTML = "";
+  const steps = [];
+  const paint = () => {
+    hs.innerHTML = steps.map(st => `<div class="hs-row" data-s="${st.state}">
+      <span class="hdot">${st.state === "ok" ? ICON.check : st.state === "bad" ? ICON.x : st.state === "run" ? ICON.spin : ICON.info}</span>
+      <b>${esc(st.label)}</b><span>${esc(st.meta || "")}</span><span class="ms">${st.ms ? fmtMs(st.ms) : ""}</span>
+    </div>`).join("");
+  };
+  const step = (label) => {
+    const st = { label, state: "run", meta: "", ms: 0 };
+    steps.push(st); paint();
+    const t = performance.now();
+    return {
+      ok(meta) { st.state = "ok"; st.meta = meta || ""; st.ms = performance.now() - t; paint(); },
+      fail(meta) { st.state = "bad"; st.meta = meta || ""; st.ms = performance.now() - t; paint(); }
+    };
+  };
+
+  const btn = $("#btnConnect");
+  btn.dataset.busy = "1";
+  btn.innerHTML = '<span class="spin"></span><span class="lbl">连接中</span>';
+
+  try {
+    if (compat === "strict") {
+      const st = step("initialize");
+      try {
+        const r = await rpc("initialize", {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "mcp-playground", version: "1.0" }
+        });
+        S.server = r && r.serverInfo || null;
+        st.ok([S.server && S.server.name, S.server && S.server.version, r && r.protocolVersion].filter(Boolean).join(" · "));
+      } catch (e) { st.fail(e.message); throw e; }
+    } else {
+      steps.push({ label: "initialize", state: "skip", meta: "宽松模式跳过", ms: 0 });
+      paint();
+    }
+
+    const stTools = step("tools/list");
+    try {
+      const r = await rpc("tools/list", {});
+      S.tools = (r && r.tools) || [];
+      stTools.ok(S.tools.length + " 个工具 · " + S.tools.map(t => t.name).slice(0, 4).join(" / "));
+    } catch (e) { stTools.fail(e.message); throw e; }
+
+    const stModels = step("models.list");
+    let out;
+    try {
+      out = await callTool("models.list", {});
+      const all = (out && out.models) || [];
+      S.models = all.filter(m => ["image", "video", "search"].includes(kindOf(m)));
+      const by = connFacts();
+      stModels.ok(S.models.length + " 个可用 · 图片 " + by.image + " / 视频 " + by.video + " / 检索 " + by.search);
+    } catch (e) { stModels.fail(e.message); throw e; }
+
+    S.connected = true;
+    $("#btnDemo").hidden = false;
+    setConnState("ok", "已连接");
+    renderModels();
+    if (!opts.silent) setTimeout(() => closeSheet("#sheetCfg"), 550);
+    if (S.models.length) {
+      // provider 里指定了 model 就用它（new-api 跳过来时通常已经知道用户点的是哪个）
+      const want = S.pendingModel && S.models.find(m => m.id === S.pendingModel);
+      const prefer = want || S.models.find(m => kindOf(m) === "image") || S.models[0];
+      S.pendingModel = null;
+      selectModel(prefer.id, { silent: true });
+    } else {
+      S.cur = null;
+      renderHeader();
+      $("#composer").hidden = true;
+      renderWelcome();
+    }
+    notifyParent("mcp-playground:connected", { models: S.models.length, tools: S.tools.length });
+    if (!opts.silent && opts.toast !== false) toast("已连接 · " + S.models.length + " 个模型", "ok");
+  } catch (e) {
+    S.connected = false;
+    S.models = []; S.tools = []; S.cur = null;
+    $("#composer").hidden = true;
+    setConnState("bad", "连接失败");
+    renderHeader(); renderModels(); renderWelcome();
+    notifyParent("mcp-playground:error", { message: e.message });
+    cfgError(e.message, e.hint);
+  } finally {
+    btn.dataset.busy = "0";
+    btn.innerHTML = "测试连接";
+  }
+}
+
+function cfgError(msg, hint) {
+  const box = $("#cfgErr");
+  box.hidden = false;
+  box.className = "form-note bad";
+  box.innerHTML = esc(msg) + (hint ? '<br><span style="color:var(--text-3)">' + esc(hint) + "</span>" : "");
+  if (!$("#sheetCfg").classList.contains("on")) toast("连接失败：" + String(msg).slice(0, 80), "bad");
+}
+
+/* 演示数据：结构与 /mcp 的 models.list 完全一致 */
+const DEMO_MODELS = [
+  { id: "gpt-image-2", kind: "image", owned_by: "openai", execution: { task: "sync", transport: "generations" },
+    input: { max_reference_images: 4 }, parameters: {
+      size: { enum: ["1024x1024", "1536x1024", "1024x1536"], default: "1024x1024" },
+      n: { min: 1, max: 4, default: 1 },
+      quality: { enum: ["auto", "high", "medium", "low"], default: "auto" }
+    }, source: "demo" },
+  { id: "doubao-seedream-5-0", kind: "image", owned_by: "bytedance", execution: { task: "sync", transport: "generations" },
+    input: { max_reference_images: 2 }, parameters: {
+      size: { enum: ["1K", "2K", "4K"], default: "2K" },
+      n: { min: 1, max: 2, default: 1 }
+    }, source: "demo" },
+  { id: "gpt-image-1.5-edits", kind: "image", owned_by: "openai", execution: { task: "sync", transport: "edits_multipart" },
+    input: { max_reference_images: 4 }, parameters: { size: { enum: ["1024x1024"], default: "1024x1024" } }, source: "demo" },
+  { id: "doubao-seedance-1-0-pro", kind: "video", owned_by: "bytedance", execution: { task: "async", transport: "video_generations" },
+    input: { max_reference_images: 1 }, parameters: {
+      duration: { enum: [5, 10], default: 5 },
+      size: { enum: ["720p", "1080p"], default: "1080p" }
+    }, source: "demo" },
+  { id: "doubao-seedance-fast", kind: "video", owned_by: "bytedance", execution: { task: "async", transport: "contents_tasks" },
+    input: {}, parameters: { duration: { enum: [5], default: 5 } }, source: "demo" },
+  { id: "volcengine-search", kind: "search", owned_by: "volcengine", execution: { task: "sync", transport: "search_query" },
+    input: {}, parameters: {
+      count: { min: 1, max: 20, default: 8 },
+      include_content: { enum: [true, false], default: false }
+    }, source: "demo" }
+];
+
+const DEMO_TOOLS = [
+  { name: "models.list" }, { name: "image.generate" }, { name: "video.generate" },
+  { name: "search.query" }, { name: "task.get" }
+];
+
+function startDemo() {
+  stopPoll();
+  S.demo = true;
+  S.connected = true;
+  S.endpoint = S.endpoint || defaultEndpoint();
+  S.server = { name: "mcp-for-apiduo", version: "demo" };
+  S.tools = DEMO_TOOLS;
+  S.models = DEMO_MODELS;
+  S.calls = [];
+  // 演示模式也有真实的报文结构：initialize / tools/list / models.list
+  const demoHandshakes = [
+    { method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "mcp-playground", version: "1.0" } },
+      result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "mcp-for-apiduo", version: "demo" } }, ms: 12 },
+    { method: "tools/list", params: {},
+      result: { tools: DEMO_TOOLS.map(t => ({ name: t.name, description: "演示工具" })) }, ms: 3 },
+    { method: "tools/call", params: { name: "models.list", arguments: {} },
+      result: { content: [{ type: "text", text: "共 6 个模型" }], structuredContent: { models: DEMO_MODELS, count: DEMO_MODELS.length } }, ms: 8 }
+  ];
+  for (const h of demoHandshakes) {
+    const id = ++rpcId;
+    record({ id, method: h.method, status: 200, ok: true, ms: h.ms,
+      req: { jsonrpc: "2.0", id, method: h.method, params: h.params },
+      res: { jsonrpc: "2.0", id, result: h.result }, bytes: 512, ct: "application/json" });
+  }
+  S.selectedCall = S.calls[S.calls.length - 1];
+  setConnState("demo", "演示模式");
+  $("#notice").hidden = false;
+  $("#btnDemo").hidden = true;
+  renderModels();
+  selectModel("gpt-image-2", { silent: true });
+}
+
+function refreshModels() {
+  if (S.demo) { renderModels(); toast("演示模式：已重新载入内置模型"); return; }
+  if (!S.connected) { openSheet("#sheetCfg"); return; }
+  const btn = $("#btnReload");
+  btn.style.opacity = ".5";
+  callTool("models.list", {}).then(out => {
+    const all = (out && out.models) || [];
+    S.models = all.filter(m => ["image", "video", "search"].includes(kindOf(m)));
+    renderModels();
+    if (S.cur && !S.models.find(m => m.id === S.cur.id)) selectModel(S.models[0]?.id, { silent: true });
+    toast("模型已刷新 · " + S.models.length + " 个", "ok");
+  }).catch(e => toast(e.message, "bad")).finally(() => { btn.style.opacity = ""; });
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   4. 左栏渲染
+   ══════════════════════════════════════════════════════════════════════ */
+function filteredModels() {
+  const q = S.q.trim().toLowerCase();
+  return S.models.filter(m => {
+    if (S.kind !== "all" && kindOf(m) !== S.kind) return false;
+    if (!q) return true;
+    return (m.id + " " + (m.owned_by || "")).toLowerCase().includes(q);
+  });
+}
+
+function modelRowsHTML(list) {
+  const groups = S.kind === "all"
+    ? ["image", "video", "search"].map(k => [k, list.filter(m => kindOf(m) === k)]).filter(([, v]) => v.length)
+    : [[S.kind, list]];
+
+  return groups.map(([k, arr]) => {
+    const head = S.kind === "all" ? `<div class="group-h">${kindName(k)}<span class="line"></span>${arr.length}</div>` : "";
+    return head + arr.map(m => {
+      const ex = execOf(m);
+      const meta = [m.owned_by, ex.task === "async" ? "异步" : ex.task === "sync" ? "同步" : "", ex.transport].filter(Boolean).join(" · ");
+      return `<button class="mrow" data-id="${esc(m.id)}" data-k="${esc(kindOf(m))}" aria-selected="${S.cur && S.cur.id === m.id}">
+        <i class="kdot"></i>
+        <span class="mr-main"><b>${esc(m.id)}</b><span>${esc(meta || "未声明执行协议")}</span></span>
+        <span class="mr-badge" data-ex="${esc(ex.task)}">${ex.task === "async" ? "异步" : ex.task === "sync" ? "同步" : "—"}</span>
+      </button>`;
+    }).join("");
+  }).join("");
+}
+
+function renderModels() {
+  const list = filteredModels();
+  const by = connFacts();
+  const counts = { "": S.models.length, image: by.image, video: by.video, search: by.search };
+
+  for (const sel of ["#kindTabs", "#kindTabsMobile"]) {
+    $$(sel + " button").forEach(b => {
+      const k = b.dataset.k;
+      b.textContent = (k ? kindName(k) : "全部") + " " + counts[k];
+      b.setAttribute("aria-selected", String(k === S.kind));
+    });
+  }
+  $("#footText").textContent = S.demo ? "演示数据 · 6 个样例模型"
+    : S.connected ? "models.list · " + S.models.length + " 个可用"
+    : "未连接服务";
+  $("#msSub").textContent = S.connected
+    ? "当前 Key 可用 " + S.models.length + " 个 · 图片 " + by.image + " / 视频 " + by.video + " / 检索 " + by.search
+    : "连接后列出当前 Key 可用的模型";
+
+  const html = list.length ? modelRowsHTML(list) : `<div class="empty-list">${
+    !S.connected ? "连接后这里会列出当前 Key 可用的图片、视频与检索模型。"
+    : S.models.length ? "没有匹配的模型。<br>换个关键词试试。"
+    : "当前 Key 下没有图片 / 视频 / 检索模型。<br>确认渠道已开通对应模型，或换一把 Key。"
+  }</div>`;
+
+  for (const sel of ["#modelList", "#modelListMobile"]) {
+    const box = $(sel);
+    if (box) box.innerHTML = html;
+  }
+}
+
+function syncQuery(from) {
+  const a = $("#q"), b = $("#qMobile");
+  if (a && a !== from) a.value = S.q;
+  if (b && b !== from) b.value = S.q;
+}
+
+function wireModelPicker(listSel, qSel, tabsSel) {
+  $(listSel)?.addEventListener("click", e => {
+    const row = e.target.closest(".mrow");
+    if (row) selectModel(row.dataset.id);
+  });
+  $(qSel)?.addEventListener("input", e => {
+    S.q = e.target.value;
+    syncQuery(e.target);
+    renderModels();
+  });
+  $(tabsSel)?.addEventListener("click", e => {
+    const b = e.target.closest("button[data-k]");
+    if (!b) return;
+    S.kind = b.dataset.k;
+    renderModels();
+  });
+}
+
+wireModelPicker("#modelList", "#q", "#kindTabs");
+wireModelPicker("#modelListMobile", "#qMobile", "#kindTabsMobile");
+$("#btnModels").addEventListener("click", () => openSheet("#sheetModels"));
+
+/* ══════════════════════════════════════════════════════════════════════
+   5. 选中模型 → 头部 / 表单
+   ══════════════════════════════════════════════════════════════════════ */
+const EXAMPLES = {
+  image: ["一只戴宇航头盔的柴犬，影棚布光，浅景深", "透明玻璃香水瓶，清晨窗边，柔光", "水墨风格的江南小镇，雨后"],
+  video: ["海浪拍打黑色礁石，慢镜头，电影质感", "城市夜景延时，车流拉成光轨", "雪山上空的云海，镜头缓慢推进"],
+  search: ["MCP 协议 2026 有什么更新", "site:github.com modelcontextprotocol", "豆包 Seedream 定价"]
+};
+
+function selectModel(id, opts = {}) {
+  const m = S.models.find(x => x.id === id);
+  if (!m) return;
+  S.cur = m;
+  S.runId += 1;       // 作废还在路上的上一次请求
+  S.form = { refs: [] };
+  S.extraVals = {};
+  S.cueDismissed = "";
+  $("#adv").open = false;
+  $("#advJson").value = "";
+  $("#advHint").className = "adv-hint";
+  $("#advHint").innerHTML = "只会合并进 <code>extra</code>；键必须是该模型声明过的参数。";
+  stopPoll();
+
+  $$(".mrow").forEach(r => r.setAttribute("aria-selected", String(r.dataset.id === id)));
+  if ($("#sheetModels").classList.contains("on")) closeSheet("#sheetModels");
+  renderHeader();
+  renderComposer();
+  renderWelcome();
+  if (!opts.silent) $("#prompt").focus({ preventScroll: true });
+}
+
+function renderHeader() {
+  const m = S.cur;
+  if (!m) {
+    $("#mName").textContent = "未选择模型";
+    $("#mSub").textContent = S.connected ? "从左侧选一个模型" : "从左侧选一个模型，或先连接服务";
+    $("#mBadges").innerHTML = "";
+    return;
+  }
+  const k = kindOf(m), ex = execOf(m), mr = maxRefs(m);
+  $("#mName").textContent = m.id;
+  const bits = [m.owned_by, ex.transport, mr === 0 ? "不支持参考图" : mr != null ? "参考图 ≤ " + mr : "参考图上限未声明"].filter(Boolean);
+  $("#mSub").textContent = bits.join(" · ");
+  $("#mBadges").innerHTML = [
+    `<span class="badge k-${esc(k)}">${esc(kindName(k))}</span>`,
+    ex.task ? `<span class="badge exec" data-t="${esc(ex.task)}">${ex.task === "async" ? "异步 · 任务 ID" : "同步 · 直返"}</span>` : `<span class="badge exec">协议未声明</span>`,
+    `<span class="badge">${Object.keys(paramsOf(m)).length} 个参数</span>`
+  ].join("");
+}
+
+/* 下拉的统一生成：声明了 default 就选中它；没有 default 就多一个「未指定」，
+   不能默认选第一项 —— 那等于替上游做了一个它没做的决定。 */
+function enumOptions(vals, def, fmt) {
+  const hasDef = def !== undefined && def !== null && def !== "";
+  const head = hasDef ? "" : `<option value="">未指定 · 上游默认</option>`;
+  return head + vals.map(v =>
+    `<option value="${esc(v)}"${hasDef && String(v) === String(def) ? " selected" : ""}>${esc(fmt ? fmt(v) : String(v))}</option>`
+  ).join("");
+}
+
+function field(label, control, opts = {}) {
+  return `<div class="field${opts.wide ? " wide" : ""}"${opts.title ? ` title="${esc(opts.title)}"` : ""}>
+    <label>${esc(label)}${opts.undeclared ? ' <span class="undeclared">未声明</span>' : ""}</label>
+    ${control}
+  </div>`;
+}
+
+function renderComposer() {
+  const m = S.cur;
+  const c = $("#composer");
+  if (!m) { c.hidden = true; return; }
+  c.hidden = false;
+  const k = kindOf(m);
+
+  $("#prompt").placeholder = k === "search" ? "输入检索词，支持 site: / -site: / \"精确短语\" / lang: / after: …"
+    : k === "video" ? "描述镜头运动、主体与氛围…" : "描述你想要的画面…";
+
+  $("#examples").innerHTML = `<span class="ex-label">示例</span>` +
+    (EXAMPLES[k] || []).map(x => `<button class="ex" data-ex="${esc(x)}">${esc(x.length > 18 ? x.slice(0, 17) + "…" : x)}</button>`).join("") +
+    `<span class="sp"></span><span class="count" id="pCount">0 / 2000</span>`;
+
+  const p = $("#params");
+  p.innerHTML = "";
+  if (k === "search") renderSearchParams(m, p);
+  else renderGenParams(m, p, k);
+
+  renderCues();
+  renderRunHint();
+  updateCount();
+}
+
+function renderGenParams(m, host, k) {
+  const sp = specOf(m, "size");
+  const sizeVals = sp && Array.isArray(sp.enum) ? sp.enum : null;
+  const sizeSuggest = k === "video" ? ["720p", "1080p", "480p"] : ["1024x1024", "1536x1024", "1024x1536"];
+  const sizeCtl = sizeVals
+    ? `<select class="inp" data-p="size">${enumOptions(sizeVals, sp && sp.default)}</select>`
+    : `<input class="inp mono" data-p="size" list="sizeList" value="${sp && sp.default != null ? esc(sp.default) : ""}" placeholder="${sp ? "模型已声明 size，按允许值填写" : "留空用上游默认"}">`;
+  host.innerHTML += field("尺寸", sizeCtl, {
+    undeclared: !sp,
+    title: sizeVals ? "来自模型画像 parameters.size.enum" : sp ? "模型声明了 size 但没有枚举，按上游要求填写" : "模型未声明 size，留空即交给上游默认"
+  });
+
+  const nSp = specOf(m, "n");
+  const nmax = nSp && typeof nSp.max === "number" ? nSp.max : 8;
+  const nDef = nSp && typeof nSp.default === "number" ? Math.max(1, Math.min(nmax, nSp.default)) : 1;
+  host.innerHTML += field("数量", `<div class="stepper">
+      <button data-step="n-1" aria-label="减少">−</button>
+      <input id="fN" data-p="n" type="number" min="1" max="${nmax}" value="${nDef}" inputmode="numeric">
+      <button data-step="n+1" aria-label="增加">+</button>
+    </div>`, { title: nSp && nSp.max ? "模型声明上限 " + nSp.max : "未声明上限，网关兜底 8" });
+
+  const q = specOf(m, "quality");
+  if (q && Array.isArray(q.enum)) {
+    host.innerHTML += field("质量", `<select class="inp" data-p="quality">${enumOptions(q.enum, q.default)}</select>`);
+  }
+
+  const d = specOf(m, "duration");
+  if (d && Array.isArray(d.enum)) {
+    host.innerHTML += field("时长", `<select class="inp" data-p="extra" data-k="duration">${enumOptions(d.enum, d.default, v => v + "s")}</select>`);
+  }
+
+  const mr = maxRefs(m);
+  if (mr === 0) {
+    host.innerHTML += `<div class="field"><label>参考图</label><span class="ref-note">声明为 0 张，不支持垫图</span></div>`;
+  } else {
+    host.innerHTML += field("参考图" + (mr != null ? " ≤ " + mr : ""),
+      `<button class="btn sm" data-addref>+ 添加</button>`, {
+        undeclared: mr == null,
+        title: mr == null ? "模型未声明上限，原样透传；建议先少量试" : "传了就按图生图 / 图生视频处理"
+      });
+    renderRefs();
+  }
+
+  // 其它声明过的参数：按类型自动生成控件
+  const known = new Set(["size", "n", "quality", "duration"]);
+  for (const [name, raw] of Object.entries(paramsOf(m))) {
+    if (known.has(name)) continue;
+    const sp2 = raw && typeof raw === "object" ? raw : {};
+    let ctl;
+    if (Array.isArray(sp2.enum)) {
+      ctl = `<select class="inp" data-p="extra" data-k="${esc(name)}">${enumOptions(sp2.enum, sp2.default)}</select>`;
+    } else if (typeof sp2.default === "boolean" || sp2.type === "boolean") {
+      const on = sp2.default === true;
+      ctl = `<label class="switch"><input type="checkbox" data-p="extra" data-k="${esc(name)}" data-bool="1"${on ? " checked" : ""}><span class="track"></span>${on ? "开启" : "关闭"}</label>`;
+    } else {
+      ctl = `<input class="inp ${typeof sp2.default === "number" ? "mono" : ""}" data-p="extra" data-k="${esc(name)}" value="${sp2.default != null ? esc(sp2.default) : ""}" placeholder="${esc(sp2.default != null ? "模型默认 " + sp2.default : "")}">`;
+    }
+    host.innerHTML += field(name, ctl, { title: "来自模型画像 parameters" });
+  }
+
+  const dl = document.createElement("datalist");
+  dl.id = "sizeList";
+  dl.innerHTML = sizeSuggest.map(v => `<option value="${esc(v)}">`).join("");
+  host.appendChild(dl);
+}
+
+function renderSearchParams(m, host) {
+  const c = specOf(m, "count");
+  const cmax = c && typeof c.max === "number" ? c.max : 50;
+  const cval = c && typeof c.default === "number" ? c.default : Math.min(8, cmax);
+  host.innerHTML += field("条数", `<div class="stepper">
+      <button data-step="count-1" aria-label="减少">−</button>
+      <input id="fCount" data-p="count" type="number" min="1" max="${cmax}" value="${cval}" inputmode="numeric">
+      <button data-step="count+1" aria-label="增加">+</button>
+    </div>`, { title: c ? "模型声明 " + (c.min || 1) + "–" + cmax : "未声明上限，默认 8" });
+
+  if (specOf(m, "include_content")) {
+    host.innerHTML += field("正文", `<label class="switch"><input type="checkbox" data-p="include_content" data-bool="1"><span class="track"></span>不返回</label>`);
+  }
+
+  const known = new Set(["count", "include_content"]);
+  for (const [name, raw] of Object.entries(paramsOf(m))) {
+    if (known.has(name)) continue;
+    const sp = raw && typeof raw === "object" ? raw : {};
+    const ctl = Array.isArray(sp.enum)
+      ? `<select class="inp" data-p="extra" data-k="${esc(name)}">${sp.enum.map(v => `<option value="${esc(v)}">${esc(String(v))}</option>`).join("")}</select>`
+      : `<input class="inp" data-p="extra" data-k="${esc(name)}" placeholder="${esc(sp.default != null ? "默认 " + sp.default : "")}">`;
+    host.innerHTML += field(name, ctl);
+  }
+}
+
+function renderRefs() {
+  const area = $("#refsArea");
+  if (!area) return;
+  const mr = maxRefs(S.cur);
+  const cap = mr == null ? 4 : mr;
+  const refs = S.form.refs;
+  if (!refs.length) { area.hidden = true; area.innerHTML = ""; return; }
+  area.hidden = false;
+  area.innerHTML = `<div class="ra-h"><b>参考图</b><span>${refs.length} / ${cap === 4 && mr == null ? "未声明" : cap}</span><span class="sp"></span>
+      <span>${mr == null ? "上限未声明，先少量试" : "传了就按图生图 / 图生视频处理"}</span></div>
+    <div class="refs">${refs.map((v, i) => `<div class="ref-row">
+      <input class="inp mono" data-ref="${i}" value="${esc(v)}" placeholder="https://…/image.png" spellcheck="false">
+      <button class="icon-btn" data-delref="${i}" title="移除">${ICON.trash}</button>
+    </div>`).join("")}</div>
+    ${refs.length < cap ? `<button class="ref-add" data-addref>+ 再加一张</button>` : ""}`;
+}
+
+/* ── 提示词线索 ──────────────────────────────────────────────────────
+   能从提示词读出来的，只有「版式 / 张数 / 时长 / 分辨率 / 质量」这几类，
+   而且必须落在模型自己声明的 enum 里。读到了只给建议，点「应用」才改表单 ——
+   静默替用户改参数，在计费接口上是最坏的一种聪明。 */
+const CN_NUM = { "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
+
+function sizeShape(v) {
+  const s = String(v).toLowerCase();
+  const m = s.match(/(\d+)\s*[x×:]\s*(\d+)/);
+  if (m) {
+    const w = Number(m[1]), h = Number(m[2]);
+    return w === h ? "square" : (w < h ? "portrait" : "landscape");
+  }
+  if (/portrait|vertical|竖/.test(s)) return "portrait";
+  if (/landscape|horizontal|横/.test(s)) return "landscape";
+  if (/square|方形/.test(s)) return "square";
+  return "";
+}
+
+function shapeName(s) { return { portrait: "竖版", landscape: "横版", square: "方形" }[s] || s; }
+function cueNumber(tok) { return /^\d+$/.test(tok) ? Number(tok) : (CN_NUM[tok] || 0); }
+
+function detectCues(m, text) {
+  const out = {};
+  // 只看紧邻的 4 个字：窗口太宽会把上一句的「不要竖版」算到下一句的「方形」头上
+  const neg = (idx) => /不|别|勿|无需|不要|非/.test(text.slice(Math.max(0, idx - 4), idx));
+
+  const sizeSp = specOf(m, "size");
+  if (sizeSp && Array.isArray(sizeSp.enum)) {
+    const res = text.match(/\b(4k|2k|1k|1080p|720p|480p)\b/i);
+    if (res && !neg(res.index)) {
+      const v = sizeSp.enum.find(x => String(x).toLowerCase().includes(res[1].toLowerCase()));
+      if (v != null) out.size = { value: String(v), label: res[1].toUpperCase() + " → " + v };
+    }
+    if (!out.size) {
+      const pats = [
+        ["portrait", /竖(版|图|屏|幅)|portrait|vertical|9\s*[:：x×]\s*16|3\s*[:：x×]\s*4/gi],
+        ["landscape", /横(版|图|屏|幅)|landscape|horizontal|16\s*[:：x×]\s*9|4\s*[:：x×]\s*3/gi],
+        ["square", /方(形|图)|1\s*[:：x×]\s*1|square/gi]
+      ];
+      for (const [shape, re] of pats) {
+        const mm = re.exec(text);
+        if (mm && !neg(mm.index)) {
+          const v = sizeSp.enum.find(x => sizeShape(x) === shape);
+          if (v != null) out.size = { value: String(v), label: shapeName(shape) + " → " + v };
+          break;
+        }
+      }
+    }
+  }
+
+  const nSp = specOf(m, "n");
+  const nmax = nSp && typeof nSp.max === "number" ? nSp.max : 8;
+  const cn = text.match(/([一两二三四五六七八九十]|\d+)\s*(张|幅|个|枚|宫格)/);
+  if (cn && !neg(cn.index)) {
+    const n = cueNumber(cn[1]);
+    if (n >= 1 && n <= nmax) out.n = { value: n, label: n + " 张" };
+  }
+
+  const dSp = specOf(m, "duration");
+  if (dSp && Array.isArray(dSp.enum)) {
+    const dm = text.match(/([一两二三四五六七八九十]|\d+)\s*(秒|s\b)/i);
+    if (dm && !neg(dm.index)) {
+      const sec = cueNumber(dm[1]);
+      const v = dSp.enum.find(x => Number(x) === sec);
+      if (v != null) out.duration = { value: String(v), label: sec + " 秒" };
+    }
+  }
+
+  const qSp = specOf(m, "quality");
+  if (qSp && Array.isArray(qSp.enum)) {
+    const qm = text.match(/高清|高质量|高画质|超清|\bhigh\b|\bhd\b/i);
+    if (qm && !neg(qm.index)) {
+      const v = qSp.enum.find(x => /high|hd|超清|高清|高/i.test(String(x)));
+      if (v != null) out.quality = { value: String(v), label: "质量 " + v };
+    }
+  }
+  return out;
+}
+
+let cueTimer = 0;
+function scheduleCues() {
+  clearTimeout(cueTimer);
+  cueTimer = setTimeout(renderCues, 220);
+}
+
+function renderCues() {
+  const box = $("#cues");
+  if (!box) return;
+  const m = S.cur;
+  const text = $("#prompt").value.trim();
+  if (!m || text.length < 4 || S.cueDismissed === text) { box.hidden = true; box.innerHTML = ""; return; }
+
+  const sug = detectCues(m, text);
+  const rows = [];
+  const sizeEl = $('[data-p="size"]');
+  if (sug.size && sizeEl && sizeEl.value !== sug.size.value) rows.push(sug.size);
+  const nEl = $("#fN");
+  if (sug.n && nEl && Number(nEl.value) !== sug.n.value) rows.push(sug.n);
+  const dEl = $('[data-p="extra"][data-k="duration"]');
+  if (sug.duration && dEl && dEl.value !== sug.duration.value) rows.push(sug.duration);
+  const qEl = $('[data-p="quality"]');
+  if (sug.quality && qEl && qEl.value !== sug.quality.value) rows.push(sug.quality);
+
+  if (!rows.length) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = `<span class="cue-i">${ICON.spark}</span><b>提示词线索</b>` +
+    rows.map(s => `<span class="cue">${esc(s.label)}</span>`).join('<span class="cue-sep">·</span>') +
+    `<span class="sp"></span>
+     <button class="cue-btn" data-cue-apply>应用</button>
+     <button class="cue-btn ghost" data-cue-skip>忽略</button>`;
+}
+
+function applyCues() {
+  const m = S.cur;
+  if (!m) return;
+  const sug = detectCues(m, $("#prompt").value.trim());
+  let n = 0;
+  if (sug.size) { const el = $('[data-p="size"]'); if (el) { el.value = sug.size.value; n++; } }
+  if (sug.n) { const el = $("#fN"); if (el) { el.value = sug.n.value; n++; } }
+  if (sug.duration) {
+    const el = $('[data-p="extra"][data-k="duration"]');
+    if (el) { el.value = sug.duration.value; n++; }
+  }
+  if (sug.quality) { const el = $('[data-p="quality"]'); if (el) { el.value = sug.quality.value; n++; } }
+  renderCues();
+  toast(n ? "已按提示词填入 " + n + " 项，可再改" : "没有可应用的项", n ? "ok" : "");
+}
+
+$("#cues").addEventListener("click", e => {
+  if (e.target.closest("[data-cue-apply]")) { applyCues(); return; }
+  if (e.target.closest("[data-cue-skip]")) {
+    S.cueDismissed = $("#prompt").value.trim();
+    $("#cues").hidden = true;
+  }
+});
+
+function updateCount() {
+  const el = $("#pCount");
+  if (el) el.textContent = $("#prompt").value.length + " / 2000";
+}
+
+function renderRunHint() {
+  const m = S.cur;
+  const hint = $("#runHint");
+  if (!m) { hint.innerHTML = ""; return; }
+  const k = kindOf(m), ex = execOf(m);
+  const cost = k === "image" ? "按上游图片单价计费" : k === "video" ? "按秒计费，提交即产生消耗" : "按次计费";
+  hint.innerHTML = ex.task === "async"
+    ? `提交后立即返回 <b>task_id</b>，页面会自动轮询；${cost}。`
+    : k === "search" ? `同步返回，通常 1–3 秒；${cost}。`
+    : `同步直返，最长约 5 分钟；${cost}。`;
+}
+
+/* 组织入参：只带非空字段，绝不替上游补默认值 */
+function buildArgs() {
+  const m = S.cur;
+  if (!m) throw new RpcError("input", "还没有选择模型", "在左栏选一个模型");
+  const text = $("#prompt").value.trim();
+  if (!text) throw new RpcError("input", kindOf(m) === "search" ? "请输入检索词" : "请输入提示词", "至少写一句描述");
+
+  const extra = parseAdv();
+  const f = S.form;
+  if (kindOf(m) === "search") {
+    const a = { query: text, model: m.id };
+    const c = num($("#fCount")?.value);
+    if (c != null) a.count = c;
+    const sw = $('[data-p="include_content"]');
+    if (sw) a.include_content = sw.checked;
+    for (const [k, v] of Object.entries(S.extraVals)) if (v !== "" && v != null) extra[k] = v;
+    if (Object.keys(extra).length) a.extra = extra;
+    return a;
+  }
+
+  const a = { prompt: text, model: m.id };
+  const size = $('[data-p="size"]')?.value.trim();
+  if (size) a.size = size;
+  const n = num($('[data-p="n"]')?.value);
+  if (n != null) a.n = n;
+  const q = $('[data-p="quality"]')?.value;
+  if (q) a.quality = q;
+  const refs = S.form.refs.map(x => x.trim()).filter(Boolean);
+  if (refs.length) a.reference_images = refs;
+  const dur = $('[data-p="extra"][data-k="duration"]')?.value;
+  if (dur) extra.duration = Number(dur) || dur;
+  for (const [k, v] of Object.entries(S.extraVals)) if (v !== "" && v != null) extra[k] = v;
+  if (Object.keys(extra).length) a.extra = extra;
+  return a;
+}
+
+function parseAdv() {
+  const raw = $("#advJson").value.trim();
+  const hint = $("#advHint");
+  if (!raw) { hint.className = "adv-hint"; hint.innerHTML = "只会合并进 <code>extra</code>；键必须是该模型声明过的参数。"; return {}; }
+  try {
+    const v = JSON.parse(raw);
+    if (!v || Array.isArray(v) || typeof v !== "object") throw new Error("需要一个 JSON 对象");
+    hint.className = "adv-hint";
+    hint.innerHTML = "会合并进 <code>extra</code>：" + Object.keys(v).map(esc).join(", ");
+    return v;
+  } catch (e) {
+    hint.className = "adv-hint bad";
+    hint.textContent = "JSON 不合法：" + e.message;
+    throw new RpcError("input", "高级参数不是合法 JSON", e.message);
+  }
+}
+
+/* 表单交互 */
+$("#composer").addEventListener("click", e => {
+  const b = e.target.closest("[data-step]");
+  if (b) {
+    const [which, dir] = b.dataset.step.split("-");
+    const input = which === "n" ? $("#fN") : $("#fCount");
+    if (!input) return;
+    const step = Number(dir || 1);
+    const min = Number(input.min) || 1, max = Number(input.max) || 99;
+    input.value = Math.max(min, Math.min(max, (Number(input.value) || min) + step));
+    return;
+  }
+  if (e.target.closest("[data-addref]")) {
+    const mr = maxRefs(S.cur);
+    const cap = mr == null ? 4 : mr;
+    if (S.form.refs.length >= cap) return;
+    S.form.refs.push("");
+    renderRefs();
+    $("#refs input:last-of-type")?.focus();
+  }
+  const del = e.target.closest("[data-delref]");
+  if (del) {
+    S.form.refs.splice(Number(del.dataset.delref), 1);
+    renderRefs();
+  }
+});
+$("#composer").addEventListener("input", e => {
+  const ref = e.target.closest("[data-ref]");
+  if (ref) S.form.refs[Number(ref.dataset.ref)] = ref.value;
+  const ex = e.target.closest('[data-p="extra"]');
+  if (ex) {
+    if (ex.dataset.bool) S.extraVals[ex.dataset.k] = ex.checked;
+    else if (ex.value === "") delete S.extraVals[ex.dataset.k];
+    else S.extraVals[ex.dataset.k] = ex.type === "number" ? Number(ex.value) : ex.value;
+  }
+  scheduleCues();
+});
+$("#composer").addEventListener("change", e => {
+  const sw = e.target.closest(".switch input[data-bool]");
+  if (sw) {
+    const label = sw.closest(".switch");
+    const txt = label.childNodes[label.childNodes.length - 1];
+    if (txt && txt.nodeType === 3) txt.textContent = sw.checked ? (S.cur && kindOf(S.cur) === "search" ? "返回正文" : "开启") : (S.cur && kindOf(S.cur) === "search" ? "不返回" : "关闭");
+    if (sw.dataset.p === "extra") S.extraVals[sw.dataset.k] = sw.checked;
+  }
+  scheduleCues();
+});
+$("#prompt").addEventListener("input", () => {
+  const t = $("#prompt");
+  t.style.height = "auto";
+  t.style.height = Math.min(168, Math.max(46, t.scrollHeight)) + "px";
+  updateCount();
+  S.cueDismissed = "";
+  scheduleCues();
+});
+$("#examples").addEventListener("click", e => {
+  const b = e.target.closest("[data-ex]");
+  if (!b) return;
+  $("#prompt").value = b.dataset.ex;
+  $("#prompt").dispatchEvent(new Event("input"));
+  $("#prompt").focus();
+});
+
+/* ══════════════════════════════════════════════════════════════════════
+   6. 运行
+   ══════════════════════════════════════════════════════════════════════ */
+async function run() {
+  if (S.running || !S.cur) return;
+  const m = S.cur;
+  let args;
+  try { args = buildArgs(); }
+  catch (e) { toast(e.message, "bad"); if (e.kind === "input") $("#prompt").focus(); return; }
+
+  const tool = kindOf(m) === "search" ? "search.query" : kindOf(m) === "video" ? "video.generate" : "image.generate";
+  S.running = true;
+  const runId = ++S.runId;
+  const modelId = m.id;
+  setBusy(true);
+  stopPoll();
+  renderLoading(tool, args);
+
+  const t0 = performance.now();
+  try {
+    const out = S.demo ? await demoCall(tool, args, m) : await callTool(tool, args);
+    if (runId !== S.runId || !S.cur || S.cur.id !== modelId) return;  // 已经换模型了
+    const ms = performance.now() - t0;
+    renderResult(out, m, ms);
+    if (out && out.status === "working" && out.task_id) startPoll(out.task_id, m);
+  } catch (e) {
+    renderError(e, tool);
+  } finally {
+    S.running = false;
+    setBusy(false);
+  }
+}
+
+function setBusy(b) {
+  const btn = $("#btnRun");
+  btn.dataset.busy = b ? "1" : "0";
+  btn.disabled = b;
+  $("#runSpin").hidden = !b;
+  $("#runIcon").hidden = b;
+  btn.querySelector(".lbl").textContent = b ? "运行中" : "运行";
+}
+
+$("#btnRun").addEventListener("click", run);
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("#q").focus(); $("#q").select(); }
+  if (e.key === "Escape") { closeSheet(); closeDrawer(); closeLightbox(); }
+});
+
+/* ══════════════════════════════════════════════════════════════════════
+   7. 结果渲染
+   ══════════════════════════════════════════════════════════════════════ */
+function stage(html) {
+  const s = $("#stage");
+  s.classList.remove("is-empty");
+  s.querySelector("#stageInner").innerHTML = html;
+  s.scrollTop = 0;
+}
+
+function renderWelcome() {
+  const s = $("#stage");
+  s.classList.add("is-empty");
+  const m = S.cur;
+
+  if (!S.connected) {
+    $("#stageInner").innerHTML = `<div class="welcome">
+      <div class="orb">${ICON.img}</div>
+      <h3>先看清它到底能做什么</h3>
+      <p>连接后列出当前 Key 可用的图片、视频与检索模型；参数、产物、原始报文都在同一页。</p>
+      <div class="row">
+        <button class="btn primary" id="welcomeConnect">连接服务</button>
+        <button class="btn" id="welcomeDemo">用演示数据看看</button>
+      </div>
+      <div class="hintline">${ICON.info}<span>密钥只保存在当前标签页，关闭即失效</span></div>
+    </div>`;
+    $("#welcomeConnect").addEventListener("click", () => openSheet("#sheetCfg"));
+    $("#welcomeDemo").addEventListener("click", startDemo);
+    return;
+  }
+
+  if (!m) {
+    $("#stageInner").innerHTML = `<div class="welcome">
+      <div class="orb">${ICON.search}</div>
+      <h3>从左边选一个模型</h3>
+      <p>列表只显示能出产物的模型（图片 / 视频 / 检索）；语言模型不属于这里。</p>
+      <div class="row"><button class="btn" id="welcomeFocus">搜索模型</button></div>
+    </div>`;
+    $("#welcomeFocus").addEventListener("click", () => { $("#q").focus(); });
+    return;
+  }
+
+  const k = kindOf(m), ex = execOf(m), mr = maxRefs(m);
+  const runMode = ex.task === "async" ? "异步 · 先返回 task_id，页面自动轮询" :
+                  ex.task === "sync" ? "同步 · 直接返回产物" : "执行协议未声明";
+  const refTxt = mr === 0 ? "不支持垫图" : mr == null ? "上限未声明" : "最多 " + mr + " 张";
+  $("#stageInner").innerHTML = `<div class="welcome ready">
+    <div class="orb">${k === "search" ? ICON.search : k === "video" ? ICON.vid : ICON.img}</div>
+    <h3>${esc(m.id)} 已就绪</h3>
+    <p>${esc(m.owned_by || "unknown")}${ex.transport ? " · " + esc(ex.transport) : ""}</p>
+    <div class="ready-facts">
+      <div class="rf"><span>执行</span><b>${esc(runMode)}</b></div>
+      <div class="rf"><span>参考图</span><b>${esc(refTxt)}</b></div>
+      <div class="rf"><span>参数</span><b>${Object.keys(paramsOf(m)).length ? Object.keys(paramsOf(m)).length + " 个已声明" : "全部交给上游默认"}</b></div>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="welcomeFill">填入示例</button>
+      <button class="btn ghost" id="welcomeEmbed">看接入配置</button>
+    </div>
+    <div class="hintline">在下方输入描述 · <kbd>⌘</kbd><kbd>↵</kbd> 运行</div>
+  </div>`;
+
+  $("#welcomeFill").addEventListener("click", () => {
+    const exs = EXAMPLES[k] || EXAMPLES.image;
+    $("#prompt").value = exs[0];
+    $("#prompt").dispatchEvent(new Event("input"));
+    $("#prompt").focus();
+  });
+  $("#welcomeEmbed").addEventListener("click", openEmbed);
+}
+
+function renderLoading(tool, args) {
+  stage(`<div class="res-head"><h2>结果</h2><span class="meta">${esc(tool)} · ${clock()}</span></div>
+  <div class="loading-card">
+    <div class="lc-top"><i class="ring"></i><span id="lcText">请求已发出，等待上游…</span><span style="margin-left:auto;font:11px var(--mono);color:var(--text-3)" id="lcTime">0.0s</span></div>
+    <div class="sk-line"></div><div class="sk-line"></div><div class="sk-line"></div>
+    <div class="sk-grid"><div class="sk-box"></div><div class="sk-box"></div></div>
+  </div>`);
+  const t0 = performance.now();
+  const timer = setInterval(() => {
+    const el = $("#lcTime");
+    if (!el) { clearInterval(timer); return; }
+    el.textContent = ((performance.now() - t0) / 1000).toFixed(1) + "s";
+  }, 120);
+  S.loadTimer = timer;
+}
+
+function stopLoad() { if (S.loadTimer) { clearInterval(S.loadTimer); S.loadTimer = null; } }
+
+function renderResult(out, m, ms, extra) {
+  stopLoad();
+  const k = kindOf(m);
+  const status = out.status || (out.outputs && out.outputs.length ? "completed" : "");
+  const isWorking = status === "working";
+  const outputs = out.outputs || [];
+  const usage = out.usage && typeof out.usage === "object"
+    ? Object.entries(out.usage).filter(([, v]) => typeof v === "number" || typeof v === "string").slice(0, 3).map(([k, v]) => k + " " + v).join(" · ")
+    : "";
+  const head = `<div class="res-head">
+    <h2>结果</h2>
+    <span class="status-pill ${isWorking ? "busy warn" : status === "failed" ? "bad" : "ok"}"><i class="dot"></i>${isWorking ? "进行中" : status === "failed" ? "失败" : "完成"}</span>
+    <span class="meta">${esc(out.model || m.id)} · ${fmtMs(ms)}${extra && extra.fromTask ? " · 含轮询" : ""}</span>
+    ${usage ? `<span class="res-usage" title="上游返回的 usage">${esc(usage)}</span>` : ""}
+    <span class="spacer"></span>
+    <button class="btn ghost sm" id="resRaw">查看报文</button>
+    <button class="btn ghost sm" id="resAgain">再跑一次</button>
+  </div>`;
+
+  let body = "";
+  if (out.error) {
+    body = errCard(out.error, "", "上游任务失败");
+  } else if (isWorking) {
+    body = taskCard(out.task_id, out.poll_after_ms || 2000);
+  } else if (k === "search" || Array.isArray(out.results)) {
+    body = searchResults(out.results || []);
+  } else if (outputs.length) {
+    body = k === "video" ? videoOutputs(outputs, out) : imageOutputs(outputs);
+  } else {
+    body = `<div class="err-card"><div class="et">${ICON.alert}<span>上游没有返回可用的产物</span></div>
+      <div class="eh">响应里没有 url / video_url。展开「响应」看原始字段，或检查该渠道是否按 url 返回。</div>
+      <div class="ea"><button class="btn sm" data-openres>查看响应</button></div></div>`;
+  }
+
+  stage(head + body);
+  wireResultActions();
+  fitImages();
+  if (isWorking) {
+    S.task = { id: out.task_id, t0: performance.now(), polls: 0, ms };
+    updateTaskCard(0, 0);
+  }
+}
+
+function imageOutputs(outputs) {
+  const n = outputs.length;
+  const cls = n === 1 ? " one" : n === 3 ? " three" : "";
+  return `<div class="grid${cls}" id="imgGrid">` + outputs.map((o, i) => {
+    const wh = o.width && o.height ? o.width + " × " + o.height : (o.mime_type || "产物");
+    return `<figure class="tile" data-i="${i}" tabindex="0" role="button" aria-label="查看产物 ${i + 1}">
+      <img src="${esc(o.url)}" alt="产物 ${i + 1}" loading="lazy" referrerpolicy="no-referrer">
+      <div class="tile-bar"><span>${esc(wh)}</span><span class="sp"></span>
+        <a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-noopen>${ICON.open}<span>打开</span></a>
+        <button data-copyurl="${esc(o.url)}">${ICON.copy}<span>链接</span></button>
+      </div>
+    </figure>`;
+  }).join("") + "</div>";
+}
+
+function videoOutputs(outputs, out) {
+  const o = outputs[0];
+  const poster = demoPoster(o.url);
+  const isDemo = S.demo || String(o.url).startsWith("data:");
+  return `<div class="video-wrap">
+    ${isDemo ? `<div class="video-poster">${poster ? `<img src="${esc(poster)}" alt="">` : ""}
+      <button class="play" id="demoPlay" aria-label="播放演示视频">${ICON.play}</button>
+      <div class="cap">演示产物 · 接入真实服务后这里会返回可播放的 mp4</div></div>`
+      : `<video src="${esc(o.url)}" controls playsinline preload="metadata"></video>`}
+  </div>
+  <div class="res-head" style="margin-top:9px">
+    <span class="meta">${esc(o.mime_type || "video")}${o.width ? " · " + o.width + "×" + o.height : ""}</span>
+    <span class="spacer"></span>
+    <button class="btn ghost sm" data-copyurl="${esc(o.url)}">${ICON.copy}<span>复制地址</span></button>
+    <a class="btn ghost sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">${ICON.open}<span>新窗口打开</span></a>
+  </div>`;
+}
+
+function searchResults(results) {
+  if (!results.length) return `<div class="empty-list" style="padding:40px 16px">上游返回了 0 条结果。</div>`;
+  return `<div class="search-results">` + results.map((r, i) => {
+    const title = r.title || r.name || r.site_name || r.url || "结果 " + (i + 1);
+    const url = r.url || r.link || r.href || "";
+    const snip = r.snippet || r.summary || r.description || r.content || r.text || "";
+    return `<a class="sr" href="${esc(url || "#")}" target="_blank" rel="noopener noreferrer">
+      <span class="idx">${String(i + 1).padStart(2, "0")}</span>
+      <span class="sr-main"><b>${esc(title)}</b>${url ? `<span class="u">${esc(url)}</span>` : ""}${snip ? `<p>${esc(String(snip).slice(0, 220))}</p>` : ""}</span>
+      <span class="arr">${ICON.open}</span>
+    </a>`;
+  }).join("") + "</div>";
+}
+
+function taskCard(id, poll) {
+  return `<div class="task-card" id="taskCard">
+    <div class="task-top"><b>异步任务已提交</b><span class="status-pill busy warn"><i class="dot"></i>生成中</span>
+      <span style="margin-left:auto;font:11px var(--mono);color:var(--text-3)" id="taskElapsed">0.0s</span></div>
+    <div class="task-id" style="margin-top:4px">${esc(id || "")}</div>
+    <div class="task-timeline">
+      <div class="tl-step ok"><i class="tdot"></i><div class="tl-main"><b>已提交</b><span>${clock()} · 上游受理</span></div></div>
+      <div class="tl-step run" id="tlPoll"><i class="tdot"></i><div class="tl-main"><b>生成中</b><span id="tlPollMeta">每 ${poll} ms 查询一次</span></div></div>
+      <div class="tl-step" id="tlDone"><i class="tdot"></i><div class="tl-main"><b>完成</b><span>取回产物</span></div></div>
+    </div>
+    <div class="res-head" style="margin-top:2px"><span class="spacer"></span>
+      <button class="btn ghost sm" id="taskCopy">复制 task_id</button>
+      <button class="btn ghost sm" id="taskStop">停止轮询</button></div>
+  </div>`;
+}
+
+function updateTaskCard(polls, elapsed) {
+  const e = $("#taskElapsed");
+  if (e) e.textContent = (elapsed / 1000).toFixed(1) + "s";
+  const meta = $("#tlPollMeta");
+  if (meta && polls) meta.textContent = "第 " + polls + " 次查询 · 已等待 " + (elapsed / 1000).toFixed(1) + "s";
+}
+
+/* 一两张图时按画布剩余高度收缩：调试台先让人看完整张图，再看大图。
+   三张以上仍按网格铺开 —— 全部塞进一屏只会小到看不清，滚动更合理。
+   网格宽度要跟着图走：只缩图不缩格子，会在灰底上留一圈难看的空。 */
+function fitImages() {
+  const grid = $("#imgGrid");
+  if (!grid) return;
+  const tiles = grid.querySelectorAll(".tile").length;
+  const cols = getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+  const narrow = window.matchMedia("(max-width:620px)").matches;
+  if (tiles > 2 || narrow) {
+    grid.style.removeProperty("--fit");
+    grid.style.removeProperty("max-width");
+    return;
+  }
+  const stageEl = $("#stage");
+  const head = stageEl.querySelector(".res-head");
+  const cs = getComputedStyle(stageEl);
+  const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  const gap = parseFloat(getComputedStyle(stageEl.querySelector(".stage-inner")).rowGap) || 0;
+  // 用实际 padding / gap 算，别再用 8、28 这种魔数 —— 换一档 padding 就会露出半截图
+  const fit = Math.max(180, Math.round(stageEl.clientHeight - pad - gap - (head ? head.offsetHeight : 0) - 2));
+  grid.style.setProperty("--fit", fit + "px");
+  grid.style.maxWidth = (cols === 1 ? Math.min(600, fit) : Math.min(820, fit * cols + 10 * (cols - 1))) + "px";
+}
+window.addEventListener("resize", () => {
+  clearTimeout(fitImages._t);
+  fitImages._t = setTimeout(fitImages, 120);
+});
+
+function wireResultActions() {
+  const raw = $("#resRaw"); if (raw) raw.addEventListener("click", () => openDrawer("res"));
+  $$("[data-openres]").forEach(b => b.addEventListener("click", () => openDrawer("res")));
+  const again = $("#resAgain"); if (again) again.addEventListener("click", run);
+  const tcopy = $("#taskCopy"); if (tcopy) tcopy.addEventListener("click", () => copy(S.task ? S.task.id : ""));
+  const dplay = $("#demoPlay"); if (dplay) dplay.addEventListener("click", () => toast("演示产物：接入真实服务后这里会是可播放的视频"));
+  const tstop = $("#taskStop"); if (tstop) tstop.addEventListener("click", () => {
+    stopPoll();
+    const pill = document.querySelector("#taskCard .status-pill");
+    if (pill) { pill.className = "status-pill warn"; pill.innerHTML = '<i class="dot"></i>已停止轮询'; }
+    const step = $("#tlPoll");
+    if (step) { step.className = "tl-step"; const b = step.querySelector("b"); if (b) b.textContent = "已停止轮询"; }
+    const el = $("#taskElapsed"); if (el) el.textContent = "任务在上游继续";
+    toast("已停止轮询；task_id 仍可手动查询");
+  });
+
+  const grid = $("#imgGrid");
+  if (grid) {
+    grid.addEventListener("click", e => {
+      const cp = e.target.closest("[data-copyurl]");
+      if (cp) { e.stopPropagation(); copy(cp.dataset.copyurl); return; }
+      if (e.target.closest("[data-noopen]")) return;
+      const tile = e.target.closest(".tile");
+      if (tile) openLightbox(tile.querySelector("img").src);
+    });
+    grid.addEventListener("keydown", e => {
+      const tile = e.target.closest(".tile");
+      if (tile && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openLightbox(tile.querySelector("img").src); }
+    });
+    $$("#imgGrid img").forEach(img => {
+      img.addEventListener("error", () => {
+        const tile = img.closest(".tile");
+        if (!tile || tile.querySelector(".fallback")) return;
+        img.remove();
+        const fb = document.createElement("div");
+        fb.className = "fallback";
+        fb.innerHTML = ICON.img + "<span>图片没能加载（可能是上游链接过期）</span><code>" + esc(img.src) + "</code>";
+        tile.appendChild(fb);
+      });
+    });
+  }
+}
+
+function errCard(msg, hint, title) {
+  return `<div class="err-card">
+    <div class="et">${ICON.alert}<span>${esc(title || "调用失败")}</span></div>
+    <div class="em">${esc(msg || "未知错误")}</div>
+    ${hint ? `<div class="eh">${esc(hint)}</div>` : ""}
+    <div class="ea"><button class="btn sm" data-openres>查看响应</button></div>
+  </div>`;
+}
+
+function renderError(e, tool) {
+  stopLoad();
+  stage(`<div class="res-head"><h2>结果</h2><span class="status-pill bad"><i class="dot"></i>失败</span>
+    <span class="meta">${esc(tool)} · ${clock()}</span></div>${errCard(e.message, e.hint || "", errTitle(e.kind))}`);
+  wireResultActions();
+}
+
+function errTitle(kind) {
+  return { network: "网络 / 跨域", http: "服务返回了错误状态", jsonrpc: "JSON-RPC 错误",
+    tool: "工具拒绝了这次调用", input: "入参不完整", protocol: "协议响应异常", config: "还没配置好" }[kind] || "调用失败";
+}
+
+/* 异步轮询 */
+function startPoll(id, m) {
+  stopPoll();
+  const t0 = performance.now();
+  let polls = 0;
+  S.task = { id, t0, polls: 0 };
+  S.tickTimer = setInterval(() => {
+    if (!S.task) return;
+    updateTaskCard(S.task.polls, performance.now() - S.task.t0);
+  }, 200);
+
+  const tick = async () => {
+    if (!S.task) return;
+    polls += 1;
+    S.task.polls = polls;
+    updateTaskCard(polls, performance.now() - t0);
+    try {
+      const out = S.demo ? await demoTask(id, polls) : await callTool("task.get", { task_id: id });
+      if (!S.task) return;
+      if (out.status === "completed") {
+        finishTask(true);
+        renderResult({ ...out, model: out.model || m.id }, m, performance.now() - t0, { fromTask: true });
+        return;
+      }
+      if (out.status === "failed") {
+        finishTask(false);
+        renderResult({ status: "failed", model: m.id, error: out.error || "上游任务失败", task_id: id }, m, performance.now() - t0, { fromTask: true });
+        return;
+      }
+      const wait = Math.max(1200, out.poll_after_ms || 2000);
+      if (performance.now() - t0 > 5 * 60 * 1000) {
+        $("#tlPollMeta").textContent = "已超过 5 分钟，任务仍在进行；可稍后用 task.get 查询";
+        $("#tlPoll").className = "tl-step";
+        return;
+      }
+      S.pollTimer = setTimeout(tick, wait);
+    } catch (e) {
+      finishTask(false);
+      const card = $("#taskCard");
+      if (card) card.insertAdjacentHTML("beforeend", `<div class="err-card" style="margin-top:10px">${ICON.alert}<div class="em" style="margin-top:6px">${esc(e.message)}</div></div>`);
+      toast(e.message, "bad");
+    }
+  };
+  S.pollTimer = setTimeout(tick, 1200);
+}
+
+function finishTask(ok) {
+  if (S.pollTimer) { clearTimeout(S.pollTimer); S.pollTimer = null; }
+  if (S.tickTimer) { clearInterval(S.tickTimer); S.tickTimer = null; }
+  const p = $("#tlPoll");
+  if (p) {
+    p.className = "tl-step " + (ok ? "ok" : "bad");
+    const b = p.querySelector("b");
+    if (b) b.textContent = ok ? "已完成" : "失败";
+  }
+  const d = $("#tlDone");
+  if (d) d.className = "tl-step " + (ok ? "ok" : "");
+  S.task = null;
+}
+
+function stopPoll() {
+  if (S.pollTimer) { clearTimeout(S.pollTimer); S.pollTimer = null; }
+  if (S.tickTimer) { clearInterval(S.tickTimer); S.tickTimer = null; }
+  S.task = null;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   8. 演示产物（不联网）
+   ══════════════════════════════════════════════════════════════════════ */
+function svgArt(seed, label, ratio) {
+  const h = ratio === "16:9" ? 576 : 1024;
+  const w = 1024;
+  const palettes = [
+    ["#ffd7a8", "#ff8f6b", "#7c3aed", "#1b1035"],
+    ["#a8e6ff", "#5aa7ff", "#1f4ed8", "#08132e"],
+    ["#d9ffe0", "#64d6a0", "#0f766e", "#04180f"],
+    ["#ffe0f0", "#ff8fc4", "#7c2d92", "#1a0620"]
+  ];
+  const p = palettes[Math.abs(hashStr(seed)) % palettes.length];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}">
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="${p[0]}"/><stop offset=".55" stop-color="${p[1]}"/><stop offset="1" stop-color="${p[2]}"/>
+      </linearGradient>
+      <radialGradient id="r" cx=".3" cy=".2" r=".8">
+        <stop offset="0" stop-color="#fff" stop-opacity=".75"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+      </radialGradient>
+      <filter id="b"><feGaussianBlur stdDeviation="46"/></filter>
+      <filter id="n"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2"/><feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .05 0"/></filter>
+    </defs>
+    <rect width="${w}" height="${h}" fill="${p[3]}"/>
+    <rect width="${w}" height="${h}" fill="url(#g)" opacity=".92"/>
+    <circle cx="${w * .68}" cy="${h * .3}" r="${w * .34}" fill="${p[0]}" opacity=".55" filter="url(#b)"/>
+    <circle cx="${w * .26}" cy="${h * .74}" r="${w * .30}" fill="${p[2]}" opacity=".55" filter="url(#b)"/>
+    <ellipse cx="${w * .44}" cy="${h * .46}" rx="${w * .34}" ry="${h * .22}" fill="url(#r)"/>
+    <g fill="none" stroke="#fff" stroke-opacity=".55">
+      <circle cx="${w * .5}" cy="${h * .5}" r="${w * .21}" stroke-width="1.3"/>
+      <circle cx="${w * .5}" cy="${h * .5}" r="${w * .13}" stroke-width="1"/>
+      <path d="M${w * .5 - w * .21} ${h * .5}h${w * .42}" stroke-width=".8" stroke-dasharray="4 7"/>
+    </g>
+    <rect width="${w}" height="${h}" filter="url(#n)" opacity=".5"/>
+    <text x="48" y="${h - 46}" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="21" fill="#fff" fill-opacity=".82">${esc(label)}</text>
+  </svg>`;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+function demoPoster(url) {
+  if (!url) return "";
+  if (String(url).startsWith("data:image/")) return url;
+  return svgArt(String(url), "seedance · demo", "16:9");
+}
+
+function demoCall(tool, args, m) {
+  return new Promise(resolve => setTimeout(() => {
+    const fakeReq = { jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name: tool, arguments: args } };
+    const t0 = performance.now();
+    let out;
+    if (tool === "search.query") {
+      out = {
+        model: m.id,
+        count: Math.min(args.count || 4, 4),
+        results: [
+          { title: "Model Context Protocol — 规范与版本", url: "https://modelcontextprotocol.io/specification", snippet: "MCP 是一个开放协议，用 JSON-RPC 连接模型与工具/数据源。2025-06-18 版本引入 Streamable HTTP 传输与结构化工具输出。" },
+          { title: "Introducing the Model Context Protocol", url: "https://www.anthropic.com/news/model-context-protocol", snippet: "客户端—服务器架构：host 里的 client 与 server 通过 transport 交换 JSON-RPC 消息，能力在 initialize 阶段协商。" },
+          { title: "mcp-for-apiduo · 把图片/视频/检索包装成 MCP 工具", url: "https://github.com/apiduo/mcp-for-apiduo", snippet: "按产物类型拆分工具，模型画像决定参数与执行协议；同步直返，异步任务用签名 task_id 轮询。" }
+        ].slice(0, Math.max(1, Math.min(args.count || 3, 3)))
+      };
+    } else if (m.kind === "video") {
+      out = {
+        status: "working", model: m.id, task_id: "demo_" + Math.random().toString(36).slice(2, 10),
+        poll_after_ms: 1600,
+        upstream: { id: "vtask_demo", status: "queued" }
+      };
+    } else {
+      const n = Math.min(args.n || 1, 4);
+      out = {
+        status: "completed", model: m.id,
+        outputs: Array.from({ length: n }, (_, i) => ({
+          url: svgArt(m.id + args.prompt + i, m.id + " · demo " + (i + 1)),
+          mime_type: "image/svg+xml", width: 1024, height: 1024
+        })),
+        usage: { images: n, credits: n * 4 },
+        upstream: { created: Math.floor(Date.now() / 1000), data: [{ url: "…" }] }
+      };
+    }
+    record({ id: fakeReq.id, method: "tools/call", status: 200, ok: true, ms: performance.now() - t0 + 620,
+      req: fakeReq, res: { jsonrpc: "2.0", id: fakeReq.id, result: { structuredContent: out } }, bytes: 1024, ct: "application/json" });
+    resolve(out);
+  }, 620 + Math.random() * 420));
+}
+
+function demoTask(id, n) {
+  return new Promise(resolve => setTimeout(() => {
+    const done = n >= 3;
+    const out = done ? {
+      status: "completed", task_id: id, model: "doubao-seedance-1-0-pro",
+      outputs: [{ url: svgArt(id, "seedance · demo", "16:9"), mime_type: "video/mp4", width: 1280, height: 720 }],
+      upstream: { id, status: "succeeded" }
+    } : { status: "working", task_id: id, poll_after_ms: 1500, model: "doubao-seedance-1-0-pro" };
+
+    const rid = ++rpcId;
+    record({ id: rid, method: "tools/call", status: 200, ok: true, ms: 420,
+      req: { jsonrpc: "2.0", id: rid, method: "tools/call", params: { name: "task.get", arguments: { task_id: id } } },
+      res: { jsonrpc: "2.0", id: rid, result: { structuredContent: out } }, bytes: 640, ct: "application/json" });
+    resolve(out);
+  }, 460));
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   9. 报文抽屉
+   ══════════════════════════════════════════════════════════════════════ */
+function isDrawerOpen() { return $("#drawer").classList.contains("on"); }
+function activeTab() { return $("#drTabs [aria-selected=true]")?.dataset.t || "req"; }
+
+function openDrawer(tab) {
+  if (!S.calls.length) { toast("还没有发出请求", "bad"); return; }
+  $("#drawer").classList.add("on");
+  $("#drawer").setAttribute("aria-hidden", "false");
+  $("#scrim").classList.add("on");
+  if (tab) setDrTab(tab);
+  renderInspector();
+}
+function closeDrawer() {
+  $("#drawer").classList.remove("on");
+  $("#drawer").setAttribute("aria-hidden", "true");
+  if ($$(".sheet.on").length) return;
+  $("#scrim").classList.remove("on");
+}
+function setDrTab(t) {
+  $$("#drTabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.t === t)));
+  renderInspector();
+}
+
+function renderInspector() {
+  const t = activeTab();
+  const body = $("#drBody");
+  const call = S.selectedCall || S.calls[S.calls.length - 1];
+  $("#drBadge").hidden = !call;
+  if (call) {
+    $("#drBadge").textContent = (call.req && call.req.method || "call") + (call.tool ? " · " + call.tool : "");
+  }
+  if (!call) {
+    body.innerHTML = `<div class="dr-empty">这里显示页面发出的每一条 JSON-RPC。<br>连接或运行一次后就有了。</div>`;
+    return;
+  }
+  if (t === "tl") {
+    body.innerHTML = `<div class="tl-list">` + S.calls.slice().reverse().map(c => `
+      <button class="tl-row" data-seq="${c.seq}" aria-selected="${c.seq === call.seq}">
+        <span class="t">${esc(c.at)}</span>
+        <span>${esc((c.req && c.req.method) || "?")}${c.tool ? " · " + esc(c.tool) : ""}</span>
+        <span class="ms"><span class="s ${c.ok ? "" : "bad"}">${c.status || "ERR"}</span> · ${fmtMs(c.ms)}</span>
+      </button>`).join("") + `</div>`;
+    body.querySelectorAll(".tl-row").forEach(r => r.addEventListener("click", () => {
+      S.selectedCall = S.calls.find(c => c.seq === Number(r.dataset.seq)) || call;
+      renderInspector();
+    }));
+    return;
+  }
+  const data = t === "req" ? call.req : call.res;
+  body.innerHTML = `<div class="call-meta">
+      <span class="m">${esc(call.at)}</span>
+      <span class="m">HTTP ${call.status || "—"}</span>
+      <span class="m">${fmtMs(call.ms)}</span>
+      ${call.bytes ? `<span class="m">${call.bytes} B</span>` : ""}
+    </div>
+    <pre class="json">${hl(data)}</pre>`;
+}
+
+$("#drTabs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-t]");
+  if (b) setDrTab(b.dataset.t);
+});
+$("#drClose").addEventListener("click", closeDrawer);
+
+/* ══════════════════════════════════════════════════════════════════════
+   10. 弹层
+   ══════════════════════════════════════════════════════════════════════ */
+function openSheet(sel) {
+  const s = $(sel);
+  s.hidden = false;
+  requestAnimationFrame(() => s.classList.add("on"));
+  $("#scrim").classList.add("on");
+  document.body.style.overflow = "hidden";
+  if (sel === "#sheetCfg") {
+    $("#cfgEp").value = S.endpoint;
+    $("#cfgKey").value = S.key;
+    $$("#cfgCompat button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.v === S.compat)));
+    updateCompatNote();
+    setTimeout(() => (S.key ? $("#cfgKey") : $("#cfgKey")).focus(), 60);
+  }
+}
+function closeSheet(sel) {
+  const targets = sel ? [$(sel)] : $$(".sheet:not([hidden])");
+  targets.forEach(s => {
+    if (!s) return;
+    s.classList.remove("on");
+    setTimeout(() => { if (!s.classList.contains("on")) s.hidden = true; }, 300);
+  });
+  if (!$$(".sheet.on").length) {
+    $("#scrim").classList.remove("on");
+    document.body.style.overflow = "";
+  }
+}
+function updateCompatNote() {
+  const v = $("#cfgCompat [aria-selected=true]")?.dataset.v || "strict";
+  $("#compatNote").innerHTML = v === "strict"
+    ? "严格模式先执行 <code>initialize</code> 握手，再列工具与模型；握手失败会明确停在第一步。"
+    : "宽松模式跳过握手，直接 <code>tools/list</code>。只在服务端不支持 initialize 时用。";
+}
+
+$$("[data-close]").forEach(b => b.addEventListener("click", () => closeSheet()));
+$("#cfgCompat").addEventListener("click", e => {
+  const b = e.target.closest("button[data-v]");
+  if (!b) return;
+  $$("#cfgCompat button").forEach(x => x.setAttribute("aria-selected", String(x === b)));
+  updateCompatNote();
+});
+$("#btnEye").addEventListener("click", () => {
+  const i = $("#cfgKey");
+  i.type = i.type === "password" ? "text" : "password";
+  $("#btnEye").textContent = i.type === "password" ? "显示" : "隐藏";
+});
+$("#btnConnect").addEventListener("click", () => connect());
+
+$("#connChip").addEventListener("click", () => openSheet("#sheetCfg"));
+$("#btnCfg").addEventListener("click", () => openSheet("#sheetCfg"));
+$("#btnLeaveDemo").addEventListener("click", () => {
+  S.demo = false; S.connected = false; S.models = []; S.cur = null; S.tools = [];
+  $("#notice").hidden = true; $("#btnDemo").hidden = false;
+  $("#composer").hidden = true;
+  setConnState("none", "未连接");
+  renderHeader(); renderModels(); renderWelcome();
+  openSheet("#sheetCfg");
+});
+$("#btnDemo").addEventListener("click", startDemo);
+$("#btnReload").addEventListener("click", refreshModels);
+$("#btnRaw").addEventListener("click", () => openDrawer(S.calls.length ? "res" : "tl"));
+$("#btnModelJson").addEventListener("click", () => {
+  if (!S.cur) { toast("先选一个模型", "bad"); return; }
+  S.selectedCall = {
+    seq: -1, at: clock(), method: "models.list", status: 200, ok: true, ms: 0, bytes: 0,
+    req: { note: "models.list 返回的模型画像（选中项）" }, res: S.cur
+  };
+  openDrawer("res");
+});
+
+/* 接入配置 */
+let embedTab = "claude";
+function providerJSON(withSecret) {
+  return {
+    type: "mcp",
+    settings: {
+      baseUrl: S.endpoint || defaultEndpoint(),
+      apiKey: withSecret && S.key ? S.key : "<your-key>",
+      compatibility: S.compat
+    }
+  };
+}
+function embedText(t) {
+  const ep = S.endpoint || defaultEndpoint();
+  const key = S.key || "<your-key>";
+  if (t === "claude") {
+    return `claude mcp add --transport http apiduo '${ep}' \\\n  --header 'Authorization: Bearer ${key}'`;
+  }
+  if (t === "cursor") {
+    return JSON.stringify({
+      mcpServers: {
+        apiduo: { type: "http", url: ep, headers: { Authorization: "Bearer " + key } }
+      }
+    }, null, 2);
+  }
+  if (t === "curl") {
+    return `curl -X POST '${ep}' \\\n  -H 'Authorization: Bearer ${key}' \\\n  -H 'Content-Type: application/json' \\\n  -H 'Accept: application/json, text/event-stream' \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`;
+  }
+  // 嵌入链接里只放占位符：真实 Key 走 postMessage，别写进 URL。
+  const q = encodeURIComponent(JSON.stringify(providerJSON(false)));
+  return `${location.origin}${location.pathname}?provider=${q}`;
+}
+function embedNote(t) {
+  if (t === "claude") return "Claude Code 用 --transport http；桌面端与 Cursor 的 mcpServers 结构相同。";
+  if (t === "cursor") return "写入 ~/.cursor/mcp.json 或 Claude Desktop 的 claude_desktop_config.json，重启客户端。";
+  if (t === "curl") return "先 tools/list 确认连通，再 tools/call。视频类用 task.get 轮询。";
+  return "链接里只有占位符。真实 Key 由宿主在 iframe 里用 postMessage 下发，别拼进 URL（会进历史与日志）。";
+}
+function renderEmbed() {
+  $$("#embedTabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.t === embedTab)));
+  $("#embedCode").textContent = embedText(embedTab);
+  $("#embedNote").textContent = embedNote(embedTab);
+}
+function openEmbed() {
+  renderEmbed();
+  openSheet("#sheetEmbed");
+}
+$("#btnEmbed").addEventListener("click", openEmbed);
+$("#embedTabs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-t]");
+  if (!b) return;
+  embedTab = b.dataset.t;
+  renderEmbed();
+});
+$("#btnCopyEmbed").addEventListener("click", () => copy(embedText(embedTab)));
+
+/* 抽屉底部复制 */
+$("#btnCopyBody").addEventListener("click", () => {
+  const c = S.selectedCall;
+  if (!c) return;
+  copy(JSON.stringify(activeTab() === "req" ? c.req : c.res, null, 2));
+});
+$("#btnCopyCurl").addEventListener("click", () => {
+  const c = S.selectedCall;
+  if (!c) return;
+  const body = JSON.stringify(c.req);
+  copy(`curl -X POST '${S.endpoint}' \\\n  -H 'Authorization: Bearer ${S.key}' \\\n  -H 'Content-Type: application/json' \\\n  -H 'Accept: application/json, text/event-stream' \\\n  -d '${body}'`);
+});
+$("#scrim").addEventListener("click", () => { closeDrawer(); closeSheet(); });
+
+/* 灯箱 */
+function openLightbox(src) {
+  $("#lbImg").src = src;
+  $("#lightbox").classList.add("on");
+}
+function closeLightbox() { $("#lightbox").classList.remove("on"); $("#lbImg").src = ""; }
+$("#lbClose").addEventListener("click", closeLightbox);
+$("#lightbox").addEventListener("click", e => { if (e.target.id === "lightbox") closeLightbox(); });
+
+/* 主题 */
+const THEMES = ["auto", "light", "dark"];
+function applyTheme(t) {
+  if (t === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  localStorage.setItem(LS_THEME, t);
+  $("#btnTheme").title = "外观：" + ({ auto: "跟随系统", light: "浅色", dark: "深色" }[t]);
+}
+$("#btnTheme").addEventListener("click", () => {
+  const cur = localStorage.getItem(LS_THEME) || "auto";
+  applyTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
+});
+applyTheme(localStorage.getItem(LS_THEME) || "auto");
+
+/* ══════════════════════════════════════════════════════════════════════
+   11. 外部配置：URL / postMessage
+   ══════════════════════════════════════════════════════════════════════ */
+function normalizeProvider(p) {
+  if (!p || typeof p !== "object") return null;
+  const s = p.settings || p;
+  return {
+    type: p.type || "mcp",
+    endpoint: s.baseUrl || s.base_url || s.endpoint || s.url || "",
+    apiKey: s.apiKey || s.api_key || s.key || "",
+    compatibility: s.compatibility === "relaxed" || s.compatibility === "loose" ? "relaxed" : "strict",
+    model: s.model || ""
+  };
+}
+
+function applyProvider(p, opts = {}) {
+  const n = normalizeProvider(p);
+  if (!n) return false;
+  if (n.type && n.type !== "mcp") toast("provider.type = " + n.type + "，当前页面只支持 MCP 传输", "bad");
+  if (n.endpoint) S.endpoint = n.endpoint;
+  if (n.apiKey) S.key = n.apiKey;
+  if (n.compatibility) S.compat = n.compatibility;
+  savePrefs();
+  if (n.apiKey) sessionStorage.setItem(SS_KEY, n.apiKey);
+  $("#cfgEp").value = S.endpoint;
+  $("#cfgKey").value = S.key;
+  setConnState("none", "未连接");
+  if (n.model) S.pendingModel = n.model;
+  if (opts.connect && n.apiKey) connect({ silent: true });
+  return true;
+}
+
+function readProviderFromURL() {
+  const qs = new URLSearchParams(location.search);
+  const raw = qs.get("provider");
+  if (raw) {
+    try { applyProvider(JSON.parse(raw), { connect: false }); }
+    catch {
+      try { applyProvider(JSON.parse(decodeURIComponent(raw)), { connect: false }); } catch {}
+    }
+    return;
+  }
+  if (qs.get("endpoint") || qs.get("apiKey") || qs.get("key")) {
+    applyProvider({
+      type: "mcp",
+      settings: {
+        baseUrl: qs.get("endpoint") || "",
+        apiKey: qs.get("apiKey") || qs.get("key") || "",
+        compatibility: qs.get("compatibility") || "strict",
+        model: qs.get("model") || ""
+      }
+    }, { connect: false });
+  }
+}
+
+window.addEventListener("message", e => {
+  if (e.source !== window.parent) return;
+  const localHttp = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(e.origin);
+  if (!/^https:\/\//.test(e.origin) && e.origin !== location.origin && !localHttp) return;
+  const d = e.data;
+  if (!d || d.type !== "mcp-playground:configure") return;
+  applyProvider(d.provider, { connect: d.connect !== false });
+});
+function notifyParent(type, payload) {
+  if (window.parent === window) return;
+  try { window.parent.postMessage({ type, ...(payload || {}) }, "*"); } catch {}
+}
+if (window.parent !== window) notifyParent("mcp-playground:ready");
+
+/* ══════════════════════════════════════════════════════════════════════
+   12. 启动
+   ══════════════════════════════════════════════════════════════════════ */
+function boot() {
+  loadPrefs();
+  $("#cfgEp").value = S.endpoint;
+  $("#cfgKey").value = S.key;
+  $$("#cfgCompat button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.v === S.compat)));
+  setConnState("none", "未连接");
+  renderWelcome();
+  renderModels();
+  readProviderFromURL();
+  if (S.key) connect({ silent: true, toast: false });
+  else if (new URLSearchParams(location.search).get("demo") === "1") startDemo();
+  // 直接用 file:// 打开时没有同源 /mcp 可打（跨域也会被浏览器挡住），
+  // 与其摆一张连不上的空页，不如进演示模式：结构、交互、报文都是真的。
+  else if (location.protocol === "file:") startDemo();
+}
+boot();
+</script>
+</body>
+</html>

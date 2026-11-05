@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """极简 mock 上游：只实现 MCP 服务需要的三个端点。"""
+import base64
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# 1×1 PNG：产物下载端点用它，避免 CLI 的 --out 只能测到「下载失败」。
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII="
+)
+
 
 MODELS = {
     "data": [
@@ -78,8 +86,18 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _base(self):
+        return "http://127.0.0.1:%d" % self.server.server_address[1]
+
     def do_GET(self):
-        if self.path == "/v1/models":
+        if self.path.startswith("/asset.png"):
+            # 产物下载：CLI 的 --out 会真的来取这个地址。
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(PNG_BYTES)))
+            self.end_headers()
+            self.wfile.write(PNG_BYTES)
+        elif self.path == "/v1/models":
             self._json(200, MODELS)
         elif self.path.startswith("/v1/contents/generations/tasks/"):
             # 火山的任务查询。产物藏在 content 对象里，不是数组 —— 这正是
@@ -136,13 +154,14 @@ class H(BaseHTTPRequestHandler):
             if not ctype.startswith("multipart/form-data"):
                 self._json(400, {"error": {"message": "edits 需要 multipart/form-data，收到 " + ctype}})
                 return
-            n_img = raw.count(b'name="image')
+            # 只数字段声明，别把 filename="image.png" 里的尾串也算进去
+            n_img = len(re.findall(rb'name="image(?:\[\])?"', raw))
             if n_img == 0:
                 self._json(400, {"error": {"message": "缺少参考图文件"}})
                 return
             self._json(200, {
                 "created": 1762000000,
-                "data": [{"url": "https://mock.local/edited-%d.png" % n_img}],
+                "data": [{"url": "%s/asset.png" % self._base()}],
                 "usage": {"images": 1, "input_images": n_img},
             })
         elif self.path == "/v1/contents/generations/tasks":
